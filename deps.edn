@@ -1,0 +1,5 @@
+{:paths ["src"]
+
+ :deps {jolt-lang/db
+        {:git/url "https://github.com/jolt-lang/db"
+         :git/sha "b016f792d3b1856899686466ffb7fa00f686ed7a"}}}
