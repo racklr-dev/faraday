@@ -2,7 +2,7 @@
 
  :deps {racklr-dev/jolt-microvm
         {:git/url "https://github.com/racklr-dev/jolt-microvm"
-         :git/sha "7487bbd3051ea3ce99cddc97f6fbaa60cd8eb230"}
+         :git/sha "4814fec93340c188e78a4a54411c2fc5808e73e2"}
 
         racklr-dev/jolt-oci
         {:git/url "https://github.com/racklr-dev/jolt-oci"
