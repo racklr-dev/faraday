@@ -43,6 +43,10 @@ Run the suite: `cd jolt-ledger && jolt run test/jolt/ledger_test.clj` — 47
 checks: seq assignment, redelivery dedup, cross-thread independence, persistence
 across close/reopen, the SPEC.md §1 canonical example, and validation errors.
 
+Smoke gate (CI fast path):
+`cd jolt-ledger && jolt run test/jolt/ledger_smoke.clj` — idempotent redelivery
+across the close/reopen durable boundary.
+
 ## License
 
 EPL-2.0
