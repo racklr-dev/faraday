@@ -13,6 +13,22 @@ runner layer (depends additionally on jolt-vm-pool + jolt-fanout). The runner
 layer (N sandboxes under budget with policy egress) and the RAP/MCP transport
 (nc-916C: a RAP server drives N tool invocations through the runner) are here.
 
+## Architecture
+
+```text
+RAP (jolt-rap)        Tool Invocations → exactly one terminal frame per call-id
+  │  :run-hook = plane/run-sandbox!
+  ▼
+runner (plane)        new-runner / run-sandbox! / run-all!
+  ├─ gate:    jolt-cedar (authorize) then jolt-admission (admit under budget)
+  ├─ fanout:  jolt-fanout + jolt-ledger     thread spawn/report tree
+  ├─ pool:    jolt-vm-pool + jolt-microvm   warm KVM sandboxes (libkrun)
+  └─ egress:  egress-id → Egress Contract   Cedar resource attrs
+  ▲
+  │ HTTP/SSE (planned)
+dashboard             docs/dashboard.md — Datastar + Rocket Flow UI
+```
+
 ## Use
 
 ```clojure
@@ -81,6 +97,27 @@ against the runner's `:egress` registry; it is snake-cased (allow-cidrs →
 allow_cidrs) and attached to the per-request Sandbox entity, because Cedar
 reads resource attributes from the entities array, not the request.
 
+### RAP transport (nc-916C)
+
+A RAP server (jolt-rap) can drive the runner via `:run-hook`: the server maps
+each Tool Invocation to a Sandbox Request and hands it to `run-sandbox!`,
+which owns gate/spawn/acquire/exec/release/report; the server then maps the
+result to a terminal RAP frame (`:denied` → error code `"denied"`, `:error` →
+the error code, `:ok` + exit 0 → `"ok"`). The E2E test
+(`test/jolt/plane_e2e_test.clj`) drives 6 concurrent invocations through the
+gate this way — 10/10 green.
+
+```clojure
+(require '[jolt.plane :as plane] '[jolt.rap :as rap])
+
+(def runner (plane/new-runner {...}))
+(def srv (rap/new-server {:fanout rt
+                          :run-hook (partial plane/run-sandbox! runner)}))
+(let [call-id (rap/invoke srv {:thread-id "thr_1" :name "run_shell"
+                               :args {:argv ["echo" "hi"]}})]
+  (rap/on-result srv call-id (fn [frame] (println frame))))
+```
+
 ## CLI
 
 ```sh
@@ -88,7 +125,7 @@ reads resource attributes from the entities array, not the request.
 jolt run src/jolt/plane/main.clj plan --config examples/plane-config.json
 # run one gate
 jolt run src/jolt/plane/main.clj check --config examples/plane-config.json --request examples/run-request.json
-# skeleton serve (accept loop lands in nc-916C)
+# serve is a skeleton: the full HTTP/SSE server is the dashboard plan (docs/dashboard.md)
 jolt run src/jolt/plane/main.clj serve --config examples/plane-config.json
 ```
 
@@ -114,7 +151,10 @@ Scaffold (nc-2355): budget + policy wired end to end, CLI + smoke test green.
 Runner (nc-FF99): gate + vm-pool + fanout wired, 6 sandboxes under a cpu2
 budget with policy egress — 14/14 green. E2E (nc-916C): RAP server wired to
 the runner via :run-hook, 6 concurrent tool invocations driven through the
-gate — 10/10 green, and the repo is pushed to racklr-dev/jolt-plane.
+gate — 10/10 green. Pushed to racklr-dev/jolt-plane (HEAD 2d302cf).
+
+The `serve` CLI is still a skeleton; the browser dashboard that replaces it is
+planned in `docs/dashboard.md` (Datastar + Rocket Flow UI).
 
 ## License
 
