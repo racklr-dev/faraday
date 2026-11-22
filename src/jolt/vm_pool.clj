@@ -111,15 +111,12 @@
     (or (contains? (:busy s) id)
         (some #(= id (-> % :handle :id)) (:warm s)))))
 
-(defn- boot!
-  "Boot a fresh VM for image+request and register it busy. Callers hold the
-  pool monitor."
-  [pool image boot-opts]
-  (let [state (:state pool)
-        vm (microvm/start! boot-opts)
-        h (->Sandbox (next-id! state "sb-") image vm boot-opts)]
-    (swap! state (fn [s] (-> s (update :total inc) (assoc-in [:busy (:id h)] h))))
-    h))
+(defn- boot-vm!
+  "Start a microVM for boot-opts (slow; no state mutation). Callers reserve a
+  boot slot under the pool monitor first, then call this OUTSIDE the monitor
+  so concurrent acquires can boot in parallel."
+  [boot-opts]
+  (microvm/start! boot-opts))
 
 (defn- evict-over!
   "While the warm set exceeds :max-warm, stop and drop the LRU warm VM.
@@ -153,7 +150,7 @@
       (fail! ":max-warm must be a non-negative integer" {:max-warm max-warm}))
     (.mkdirs (File. cache-dir))
     (->Pool (assoc opts :image image :cache-dir cache-dir :max-warm max-warm)
-            (atom {:warm [] :busy {} :total 0 :snapshots {} :id-seq 0 :stamp 0})
+            (atom {:warm [] :busy {} :total 0 :booting 0 :snapshots {} :id-seq 0 :stamp 0})
             (Object.))))
 
 (defn acquire
@@ -174,23 +171,45 @@
           state (:state pool)
           lock (:lock pool)
           max-warm (:max-warm opts)]
-      (locking lock
-        (loop []
-          (let [s @state
-                e (warm-entry-for (:warm s) image)]
-            (cond
-              e (let [h (:handle e)]
-                  (swap! state (fn [s] (-> s
-                                           (assoc :warm (remove-warm (:warm s) (:id h)))
-                                           (assoc-in [:busy (:id h)] h))))
-                  h)
-              (< (:total s) max-warm) (boot! pool image boot-opts)
-              :else (do
-                      (try (.wait lock)
-                           (catch InterruptedException e
-                             (.interrupt (Thread/currentThread))
-                             (throw (RuntimeException. "interrupted acquiring sandbox" e))))
-                      (recur)))))))))
+      (loop []
+        (let [reservation
+              (locking lock
+                (let [s @state
+                      e (warm-entry-for (:warm s) image)]
+                  (cond
+                    e (let [h (:handle e)]
+                        (swap! state (fn [s] (-> s
+                                                 (assoc :warm (remove-warm (:warm s) (:id h)))
+                                                 (assoc-in [:busy (:id h)] h))))
+                        [:handle h])
+                    (< (+ (:total s) (or (:booting s) 0)) max-warm)
+                    (let [id (next-id! state "sb-")]
+                      (swap! state update :booting inc)
+                      [:boot id boot-opts])
+                    :else
+                    (do (try (.wait lock)
+                             (catch InterruptedException e
+                               (.interrupt (Thread/currentThread))
+                               (throw (RuntimeException. "interrupted acquiring sandbox" e))))
+                        [:retry]))))]
+          (case (first reservation)
+            :handle (second reservation)
+            :boot (let [[_ id bo] reservation]
+                    (try
+                      (let [vm (boot-vm! bo)  ; slow; outside the monitor
+                            h (->Sandbox id image vm bo)]
+                        (locking lock
+                          (swap! state (fn [s] (-> s (update :total inc)
+                                                   (update :booting dec)
+                                                   (assoc-in [:busy id] h))))
+                          (.notifyAll lock))
+                        h)
+                      (catch Exception e
+                        (locking lock
+                          (swap! state update :booting dec)
+                          (.notifyAll lock))
+                        (throw e))))
+            :retry (recur)))))))
 
 (defn release
   "Return handle to the warm pool, or discard it if the pool is full. Wakes
@@ -280,5 +299,5 @@
         (doseq [h (vals (:busy s))]
           (try (microvm/stop! (:vm h)) (catch Exception _ nil)))
         (rm-rf! (str (:cache-dir (:opts pool)) "/snapshots"))
-        (reset! state {:warm [] :busy {} :total 0 :snapshots {} :id-seq 0 :stamp 0})
+        (reset! state {:warm [] :busy {} :total 0 :booting 0 :snapshots {} :id-seq 0 :stamp 0})
         :closed))))
