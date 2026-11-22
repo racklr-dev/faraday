@@ -1,0 +1,15 @@
+{:paths ["src" "assets"]
+
+ :deps {jolt-lang/glimmer-datastar
+        {:git/url "https://github.com/jolt-lang/glimmer-datastar"
+         :git/sha "1ee12aaaf587c5fae22cb94747fe280c20e3380b"}
+
+        jolt-lang/ring-chez-adapter
+        {:git/url "https://github.com/jolt-lang/ring-chez-adapter"
+         :git/sha "387cf67ea7b6a8573c6ee6abca6026a45bc3b6bf"}
+
+        racklr-dev/jolt-plane
+        {:git/url "https://github.com/racklr-dev/jolt-plane"
+         :git/sha "471a74174888b548936ed6e7b8cd56c0831060f1"}}
+
+ :aliases {:serve {:main-opts ["-m" "jolt.dashboard.main"]}}}
