@@ -6,4 +6,4 @@
 
         racklr-dev/jolt-vm-pool
         {:git/url "https://github.com/racklr-dev/jolt-vm-pool"
-         :git/sha "ff23968b2c096e652b301945919a0fa6f31693e6"}}}
+         :git/sha "db74b3f3faa9eaf8a058f681cc3c837a8a1178d1"}}}
