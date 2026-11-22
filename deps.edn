@@ -14,4 +14,8 @@
 
         racklr-dev/jolt-fanout
         {:git/url "https://github.com/racklr-dev/jolt-fanout"
-         :git/sha "1de939ad40c1ed5e3ad1e02e9a2fb80d83db3500"}}}
+         :git/sha "1de939ad40c1ed5e3ad1e02e9a2fb80d83db3500"}
+
+        racklr-dev/jolt-rap
+        {:git/url "https://github.com/racklr-dev/jolt-rap"
+         :git/sha "454d1196873551ea4d854cb4df80fdd0d3b6ebbd"}}}

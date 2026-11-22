@@ -242,7 +242,9 @@
                :request-id (:request-id request)
                :thread-id thread-id
                :report report
-               :exit (:exit r)}))
+               :exit (:exit r)
+               :stdout (:stdout r)
+               :stderr (:stderr r)}))
           (finally
             (release pl permit))))
       (catch Exception e
