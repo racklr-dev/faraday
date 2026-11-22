@@ -19,6 +19,12 @@ build step.
   are optimistic until the server broadcasts the snapped coordinates. That is
   exactly the agent topology — threads → invocations → sandboxes — streamed
   live and consistent across tabs.
+- **glimmer-datastar** (jolt-lang, MIT) already implements the Datastar v1.0
+  server: `wrap-datastar` renders the handler under a reactive loop, subscribing
+  each SSE connection to the `glimmer.ratom` cells its last render dereffed.
+  Writes batch per tick, slow clients get the newest frame only, components are
+  cached, and changed HTML is diffed down to id-patched parts (DBSP's `D`).
+  The dashboard composes it instead of hand-rolling an emitter.
 
 ## What the dashboard manages (the real API surface)
 
@@ -44,12 +50,12 @@ Browser (thin client — no build step)
         │  (text/event-stream, one stream per tab)
         ▼  HTTP GET / POST (data-on:click → action endpoint, signals as form body)
 jolt-dashboard  (Clojure, jolt — new repo racklr-dev/jolt-dashboard)
-  ├─ http.clj    : routes  /  /events  /actions/*  /assets
-  ├─ sse.clj     : Datastar SSE emitter (Clojure)
-  ├─ board.clj   : one atom of plane state, sampled + diffed + broadcast
-  ├─ views/*.clj : Hiccup fragments per panel
+  ├─ handler.clj : routes  /  /events  /actions/*  /assets
+  ├─ board.clj   : one glimmer ratom of plane state, resampled every 250ms
+  ├─ views/*.clj : Hiccup fragments per panel (cached components)
   └─ actions.clj : POST handlers that call the plane/rap/pool below
-        │  (in-process function calls — the dashboard is a peer, not a client)
+        │  served by ring-chez-adapter (BSD sockets, :strategy :fibers)
+        │  SSE + reactive diff/patch by glimmer-datastar (wrap-datastar)
         ▼
   jolt-plane · jolt-rap · jolt-vm-pool · jolt-fanout+jolt-ledger ·
   jolt-memo · jolt-admission · jolt-cedar
@@ -61,7 +67,7 @@ authoritative and lets the UI stream the same objects the tests assert.
 
 ## Board atom (the single source for the UI)
 
-One `board` atom holds the last sampled snapshot:
+One `board` ratom (a `glimmer.ratom` cell) holds the last sampled snapshot:
 
 ```clojure
 {:plane   {:stats <admission stats> :policy {:policies [...] :schema ...}}
@@ -77,34 +83,42 @@ One `board` atom holds the last sampled snapshot:
  :activity [...recent events...]}
 ```
 
-A sampler runs every 250ms: it calls `plane/stats`, `pool/stats`, `memo/stats`,
-the rap call map (via a hook the dashboard registers), and the ledger's recent
-messages, then diffs against the previous board. Only changed fragments are
-emitted (selector-scoped), so N sandboxes do not mean N redraws — only the
-rows/nodes that changed.
+A sampler fiber runs every 250ms: it calls `plane/stats`, `pool/stats`,
+`memo/stats`, the rap call map (via a hook the dashboard registers), and the
+ledger's recent messages, then `swap!`s the board ratom. `wrap-datastar`
+re-renders each dirty connection once per tick, diffs against its last frame,
+and emits only the changed id-patched parts — cached components render once per
+change and are shared across tabs — so N sandboxes do not mean N redraws.
 
 ## Datastar wire protocol (the only client/server contract)
 
-The Clojure emitter produces SSE frames:
+glimmer-datastar emits the Datastar v1.0 SSE frames (`text/event-stream;
+charset=utf-8`):
 
 ```text
-event: datastar-merge-fragments
-data: {"fragments":"<div id=\"budget\">…</div>","mergeMode":"morph","selector":"#budget"}
+event: datastar-patch-elements
+id: 22503D92
+data: selector body
+data: mode inner
+data: namespace html
+data: elements <div><section id="budget">…</section>…</div>
+data: useViewTransition false
 
-event: datastar-merge-signals
+event: datastar-patch-signals
 data: {"signals":{"poolWarm":2,"granted":6,"waiting":0}}
-
-event: datastar-remove-fragments
-data: {"selector":"#call_123"}
-
-event: datastar-execute-script
-data: {"script":"…","autoRemove":true}
 ```
 
-- `datastar-merge-fragments` — morph/append a server-rendered fragment into a selector.
-- `datastar-merge-signals` — push a batch of reactive signals (`$board.poolWarm`, …).
-- `datastar-remove-fragments` — drop a finished element (e.g. a cancelled row).
-- `datastar-execute-script` — rare imperative escape (e.g. snap the Rocket canvas to authoritative coords).
+- `datastar-patch-elements` — merge server-rendered HTML into a selector (modes
+  `inner`/`outer`); the render loop sends only the id-patched parts when the
+  page changed around them, the whole page otherwise.
+- `datastar-patch-signals` — push a batch of reactive signals
+  (`$board.poolWarm`, …).
+- Actions arrive with the `datastar-request: true` header and their signals
+  parsed into `:jolt.datastar/signals`; handlers reply `patch-signals` or a
+  fragment update.
+- The client SDK also understands `datastar-remove-fragments` and
+  `datastar-execute-script`, emitted by hand when a finished element must drop
+  or the Rocket canvas must snap to authoritative coordinates.
 
 The shell carries the initial `data-signals` blob; the SSE stream keeps them
 fresh. Actions POST the current signals back (Datastar sends them on every
@@ -186,12 +200,15 @@ fragment updates):
 
 ## Dependencies & open decisions
 
-- **HTTP/SSE server**: hand-rolled on JDK `com.sun.net.httpserver.HttpServer`
-  (zero heavy deps, matches the jolt-native ethos) vs Ring+Jetty (middleware +
-  static files for free). Recommendation: start on the JDK server; add Ring only
-  if static-file/auth middleware outweighs hand-rolling.
-- **Rocket/Datastar bundle**: vendor `datastar-rocket.js` (v1.0.5) into
-  `assets/`; pin it.
+- **HTTP + SSE server**: `ring-chez-adapter` (BSD sockets, `:strategy :fibers`,
+  static files + gzip middleware; gzip carries its window across SSE frames) +
+  `glimmer-datastar` (the Datastar v1.0 server: reactive ratom render loop,
+  tick batching, frame dropping, component cache, id-part diffing). Pin
+  `glimmer-datastar` v0.1.12, `ring-chez-adapter` v0.10.1, and `router` v0.0.3
+  (reitit-compatible trie) once actions multiply.
+- **Rocket/Datastar client bundle**: vendor `datastar-rocket.js` (v1.0.5) into
+  `assets/`; pin it. Rocket Flow is the canvas half; glimmer-datastar is the
+  server half — they meet at the SSE contract above.
 - **Auth**: operator console → bind 127.0.0.1 by default + optional bearer token;
   never a public endpoint, never unvalidated policy/budget apply.
 - **Repo**: new `racklr-dev/jolt-dashboard` (dashboard depends on plane, never
