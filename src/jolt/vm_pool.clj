@@ -1,12 +1,11 @@
 ;; jolt-vm-pool: warm VM pool + snapshot hibernate.
-;; A pool keeps a bounded set of warm microVMs (jolt-microvm) keyed by image,
-;; hands them out on acquire (reusing the most recently released warm VM for
-;; the requested image, booting one when none is warm), returns them on
-;; release (evicting the least-recently-released VM past :max-warm), and
-;; suspends/resumes via jolt-microvm snapshots (hibernate/restore). The
-;; Sandbox Request is jolt-contracts SPEC.md §2; the pool owns VM *lifecycle*
-;; only — running the request argv is the caller's job against the handle's
-;; live :vm (see the Sandbox record).
+;; A pool keeps a bounded set of microVMs (jolt-microvm) keyed by image:
+;; acquire reuses the most recently released warm VM for the image, boots one
+;; while the live count is under :max-warm, and blocks until a release when
+;; the pool is full; release evicts the least-recently-released VM past
+;; :max-warm; hibernate/restore suspend and resume via snapshots. The Sandbox
+;; Request is jolt-contracts SPEC.md §2; the pool owns VM lifecycle only:
+;; running the request argv is the caller's job via (jolt.microvm/exec ...).
 (ns jolt.vm-pool
   "Warm VM pool and snapshot hibernate for the jolt control plane.
 
@@ -16,13 +15,16 @@
   the jolt-contracts SPEC.md §2 shape. An optional admission hook (Budget
   Permit seam, SPEC.md §5) can gate acquire without a contract change.
 
-  The pool owns VM lifecycle. To run a request's argv, callers execute
-  against the handle's live VM: (jolt.microvm/exec (:vm handle) ...)."
+  acquire/release/hibernate/restore/close! are concurrency-safe: a per-pool
+  monitor serializes them, and acquire blocks while the pool holds :max-warm
+  live VMs and nothing warm is available, so the pool never boots more than
+  :max-warm live VMs. To run a request's argv, callers execute against the
+  handle's live VM: (jolt.microvm/exec (:vm handle) ...)."
   (:require [jolt.microvm :as microvm]
             [clojure.java.shell :as shell])
   (:import [java.io File]))
 
-(defrecord Pool [opts state])
+(defrecord Pool [opts state lock])
 
 ;; An opaque sandbox handle: a live jolt-microvm VM plus the metadata the
 ;; pool needs to release/hibernate it and to restore its snapshot.
@@ -110,7 +112,8 @@
         (some #(= id (-> % :handle :id)) (:warm s)))))
 
 (defn- boot!
-  "Boot a fresh VM for image+request and register it busy."
+  "Boot a fresh VM for image+request and register it busy. Callers hold the
+  pool monitor."
   [pool image boot-opts]
   (let [state (:state pool)
         vm (microvm/start! boot-opts)
@@ -119,7 +122,8 @@
     h))
 
 (defn- evict-over!
-  "While the warm set exceeds :max-warm, stop and drop the LRU warm VM."
+  "While the warm set exceeds :max-warm, stop and drop the LRU warm VM.
+  Callers hold the pool monitor."
   [pool]
   (let [state (:state pool)
         max-warm (:max-warm (:opts pool))]
@@ -137,8 +141,9 @@
 
 (defn new-pool
   "Open (or create) a pool rooted at opts. Required: :image (OCI ref),
-  :cache-dir. Optional: :max-warm (int), :admission-hook (fn request -> truthy
-  to proceed, nil = always admit). Returns an opaque pool handle."
+  :cache-dir. Optional: :max-warm (int, the bound on live VMs),
+  :admission-hook (fn request -> truthy to proceed, nil = always admit).
+  Returns an opaque pool handle."
   [opts]
   (let [opts (or opts {})
         image (non-empty-string! (:image opts) :image)
@@ -148,13 +153,15 @@
       (fail! ":max-warm must be a non-negative integer" {:max-warm max-warm}))
     (.mkdirs (File. cache-dir))
     (->Pool (assoc opts :image image :cache-dir cache-dir :max-warm max-warm)
-            (atom {:warm [] :busy {} :total 0 :snapshots {} :id-seq 0 :stamp 0}))))
+            (atom {:warm [] :busy {} :total 0 :snapshots {} :id-seq 0 :stamp 0})
+            (Object.))))
 
 (defn acquire
-  "Hand out a warm sandbox for request (a Sandbox Request map, SPEC.md §2),
-  booting one if the pool has none warm. If the pool has an admission hook and
-  it returns falsy, throws :admission-denied. Returns an opaque sandbox
-  handle."
+  "Hand out a sandbox for request (a Sandbox Request map, SPEC.md §2). Reuses
+  a warm VM for the image when one is available, boots one while fewer than
+  :max-warm VMs are live, and blocks until a release when the pool is full.
+  If the pool has an admission hook and it returns falsy, throws
+  :admission-denied. Returns an opaque sandbox handle."
   [pool request]
   (let [opts (:opts pool)
         hook (:admission-hook opts)]
@@ -165,77 +172,95 @@
     (let [boot-opts (request->boot-opts pool request)
           image (:image boot-opts)
           state (:state pool)
-          e (warm-entry-for (:warm @state) image)]
-      (if e
-        (let [h (:handle e)]
-          (swap! state (fn [s] (-> s
-                                   (assoc :warm (remove-warm (:warm s) (:id h)))
-                                   (assoc-in [:busy (:id h)] h))))
-          h)
-        (boot! pool image boot-opts)))))
+          lock (:lock pool)
+          max-warm (:max-warm opts)]
+      (locking lock
+        (loop []
+          (let [s @state
+                e (warm-entry-for (:warm s) image)]
+            (cond
+              e (let [h (:handle e)]
+                  (swap! state (fn [s] (-> s
+                                           (assoc :warm (remove-warm (:warm s) (:id h)))
+                                           (assoc-in [:busy (:id h)] h))))
+                  h)
+              (< (:total s) max-warm) (boot! pool image boot-opts)
+              :else (do
+                      (try (.wait lock)
+                           (catch InterruptedException e
+                             (.interrupt (Thread/currentThread))
+                             (throw (RuntimeException. "interrupted acquiring sandbox" e))))
+                      (recur)))))))))
 
 (defn release
-  "Return handle to the warm pool, or discard it if the pool is full. Returns
-  the pool's new warm count."
+  "Return handle to the warm pool, or discard it if the pool is full. Wakes
+  waiters blocked in acquire. Returns the pool's new warm count."
   [pool handle]
   (let [state (:state pool)
+        lock (:lock pool)
         id (:id handle)]
-    (when-not (live-handle? pool handle)
-      (fail! "handle is not held by this pool" {:id id}))
-    (swap! state (fn [s]
-                   (let [s (if (contains? (:busy s) id)
-                             (update s :busy dissoc id)
-                             (assoc s :warm (remove-warm (:warm s) id)))
-                         s (update s :stamp inc)]
-                     (update s :warm (fn [w] (conj (vec w)
-                                                   {:stamp (:stamp s)
-                                                    :image (:image handle)
-                                                    :handle handle}))))))
-    (evict-over! pool)
-    (count (:warm @state))))
+    (locking lock
+      (when-not (live-handle? pool handle)
+        (fail! "handle is not held by this pool" {:id id}))
+      (swap! state (fn [s]
+                     (let [s (if (contains? (:busy s) id)
+                               (update s :busy dissoc id)
+                               (assoc s :warm (remove-warm (:warm s) id)))
+                           s (update s :stamp inc)]
+                       (update s :warm (fn [w] (conj (vec w)
+                                                     {:stamp (:stamp s)
+                                                      :image (:image handle)
+                                                      :handle handle}))))))
+      (evict-over! pool)
+      (.notifyAll lock)
+      (count (:warm @state)))))
 
 (defn hibernate
   "Suspend handle to a snapshot and return its snapshot-ref (opaque string)."
   [pool handle]
   (let [state (:state pool)
+        lock (:lock pool)
         id (:id handle)]
-    (when-not (live-handle? pool handle)
-      (fail! "handle is not held by this pool" {:id id}))
-    (let [snap-ref (next-id! state "snap-")
-          vm (:vm handle)]
-      (microvm/save-snapshot! vm snap-ref)
-      (try (microvm/stop! vm) (catch Exception _ nil))
-      (swap! state (fn [s]
-                     (let [s (if (contains? (:busy s) id)
-                               (update s :busy dissoc id)
-                               (assoc s :warm (remove-warm (:warm s) id)))]
-                       (-> s
-                           (update :total dec)
-                           (assoc-in [:snapshots snap-ref] {:image (:image handle)
-                                                            :boot-opts (:boot-opts handle)})))))
-      snap-ref)))
+    (locking lock
+      (when-not (live-handle? pool handle)
+        (fail! "handle is not held by this pool" {:id id}))
+      (let [snap-ref (next-id! state "snap-")
+            vm (:vm handle)]
+        (microvm/save-snapshot! vm snap-ref)
+        (try (microvm/stop! vm) (catch Exception _ nil))
+        (swap! state (fn [s]
+                       (let [s (if (contains? (:busy s) id)
+                                 (update s :busy dissoc id)
+                                 (assoc s :warm (remove-warm (:warm s) id)))]
+                         (-> s
+                             (update :total dec)
+                             (assoc-in [:snapshots snap-ref] {:image (:image handle)
+                                                              :boot-opts (:boot-opts handle)})))))
+        snap-ref))))
 
 (defn restore
   "Resume snapshot-ref into a warm sandbox and return its handle."
   [pool snapshot-ref]
   (let [state (:state pool)
-        meta (get-in @state [:snapshots snapshot-ref])]
-    (when-not meta
-      (fail! "snapshot-ref is not held by this pool" {:snapshot-ref snapshot-ref}))
-    (let [{:keys [image boot-opts]} meta
-          template {:image image
-                    :cache-dir (:cache-dir (:opts pool))
-                    :opts {:arch (:arch boot-opts)}}
-          _ (microvm/restore-snapshot! template snapshot-ref)
-          vm (microvm/start! boot-opts)
-          h (->Sandbox (next-id! state "sb-") image vm boot-opts)]
-      (swap! state (fn [s]
-                     (let [s (-> s (update :total inc) (update :stamp inc))]
-                       (update s :warm (fn [w] (conj (vec w)
-                                                     {:stamp (:stamp s)
-                                                      :image image
-                                                      :handle h}))))))
-      h)))
+        lock (:lock pool)]
+    (locking lock
+      (let [meta (get-in @state [:snapshots snapshot-ref])]
+        (when-not meta
+          (fail! "snapshot-ref is not held by this pool" {:snapshot-ref snapshot-ref}))
+        (let [{:keys [image boot-opts]} meta
+              template {:image image
+                        :cache-dir (:cache-dir (:opts pool))
+                        :opts {:arch (:arch boot-opts)}}
+              _ (microvm/restore-snapshot! template snapshot-ref)
+              vm (microvm/start! boot-opts)
+              h (->Sandbox (next-id! state "sb-") image vm boot-opts)]
+          (swap! state (fn [s]
+                         (let [s (-> s (update :total inc) (update :stamp inc))]
+                           (update s :warm (fn [w] (conj (vec w)
+                                                         {:stamp (:stamp s)
+                                                          :image image
+                                                          :handle h}))))))
+          h)))))
 
 (defn stats
   "Return {:warm n, :total n, :snapshots n} for the pool."
@@ -247,11 +272,13 @@
   "Shut down every sandbox and close the pool."
   [pool]
   (let [state (:state pool)
-        s @state]
-    (doseq [e (:warm s)]
-      (try (microvm/stop! (:vm (:handle e))) (catch Exception _ nil)))
-    (doseq [h (vals (:busy s))]
-      (try (microvm/stop! (:vm h)) (catch Exception _ nil)))
-    (rm-rf! (str (:cache-dir (:opts pool)) "/snapshots"))
-    (reset! state {:warm [] :busy {} :total 0 :snapshots {} :id-seq 0 :stamp 0})
-    :closed))
+        lock (:lock pool)]
+    (locking lock
+      (let [s @state]
+        (doseq [e (:warm s)]
+          (try (microvm/stop! (:vm (:handle e))) (catch Exception _ nil)))
+        (doseq [h (vals (:busy s))]
+          (try (microvm/stop! (:vm h)) (catch Exception _ nil)))
+        (rm-rf! (str (:cache-dir (:opts pool)) "/snapshots"))
+        (reset! state {:warm [] :busy {} :total 0 :snapshots {} :id-seq 0 :stamp 0})
+        :closed))))

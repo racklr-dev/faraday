@@ -94,20 +94,21 @@
   (reset-fakes!)
   (let [p (new-test-pool {:max-warm 2})
         h1 (pool/acquire p (req))
-        h2 (pool/acquire p (req))
-        h3 (pool/acquire p (req))]
-    (check "3 boots for 3 acquires with empty pool" 3 (count @boots))
+        h2 (pool/acquire p (req))]
+    (check "2 boots for 2 acquires on an empty pool" 2 (count @boots))
+    (check "stats: total bounded at max-warm" {:warm 0 :total 2 :snapshots 0} (pool/stats p))
     (pool/release p h1)
-    (pool/release p h2)
-    (let [n (pool/release p h3)]
-      (check "release past max-warm evicts down to 2" 2 n)
-      (check "LRU: evicted the first-released VM" [(:vm-id (:vm h1))] @stops)
-      (check "stats after eviction" {:warm 2 :total 2 :snapshots 0} (pool/stats p)))
-    (let [h4 (pool/acquire p (req))]
-      (check "reuse is MRU: newest released VM, not the older one"
-             (:vm-id (:vm h3)) (:vm-id (:vm h4)))
-      (check "no new boot on MRU reuse" 3 (count @boots))
-      (pool/release p h4))))
+    (let [h3 (pool/acquire p (req))]
+      (check "acquire after release reuses the warm VM (no new boot)" 2 (count @boots))
+      (check "reuses the released VM" (:vm-id (:vm h1)) (:vm-id (:vm h3)))
+      (pool/release p h2)
+      (pool/release p h3)
+      (check "stats: both VMs warm" {:warm 2 :total 2 :snapshots 0} (pool/stats p))
+      (let [h4 (pool/acquire p (req))]
+        (check "reuse is MRU: newest released VM, not the older one"
+               (:vm-id (:vm h3)) (:vm-id (:vm h4)))
+        (check "no new boot on MRU reuse" 2 (count @boots))
+        (pool/release p h4)))))
 
 ;; -- admission hook ----------------------------------------------------------
 (with-fake-microvm
@@ -144,6 +145,22 @@
       (check "reuse is keyed by image (img-b reuses, no boot)" 2 (count @boots))
       (check "reuses the img-b VM" (:vm-id (:vm hb)) (:vm-id (:vm hb2)))
       (pool/release p hb2))))
+
+;; -- concurrent acquire blocks at :max-warm until a release ------------------
+(with-fake-microvm
+  (reset-fakes!)
+  (let [p (new-test-pool {:max-warm 1})
+        h1 (pool/acquire p (req))
+        blocked (future (pool/acquire p (req)))]
+    (Thread/sleep 200)
+    (check "second acquire blocks while the only VM is busy" true (not (future-done? blocked)))
+    (check "no boot while blocked" 1 (count @boots))
+    (pool/release p h1)
+    (let [h2 (deref blocked 5000 :timeout)]
+      (check "blocked acquire unblocks after release" true (not= :timeout h2))
+      (check "unblocked acquire reused the warm VM (no new boot)" 1 (count @boots))
+      (check "reused the released VM" (:vm-id (:vm h1)) (:vm-id (:vm h2)))
+      (pool/release p h2))))
 
 ;; -- hibernate / restore -----------------------------------------------------
 (with-fake-microvm
