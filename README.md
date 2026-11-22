@@ -35,8 +35,8 @@ short-circuit in-flight calls with a terminal cancelled frame; `close!` releases
 a subscription or stops the server. The test fakes only vm-pool/microvm and runs
 against a real ledger/fanout — `test/jolt/rap_test.clj`.
 
-Note: deps.edn currently pins jolt-fanout and jolt-vm-pool via `:local/root` so
-tests run before push; swap both to pinned `:git/sha` values before publishing.
+deps.edn pins jolt-fanout and jolt-vm-pool to their published `:git/sha` values
+on `https://github.com/racklr-dev`.
 
 ## License
 
