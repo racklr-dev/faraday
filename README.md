@@ -3,12 +3,15 @@
 One concrete mechanism: the plane daemon that ties the two security seams
 into one gate. A sandbox run is authorized by the Cedar policy engine
 (jolt-cedar, jolt-contracts SPEC §6) and only then admitted under a resource
-budget (jolt-admission, SPEC §5). `gate` is that gate; the CLI in
+budget (jolt-admission, SPEC §5). `gate` is that gate; `new-runner`/`run-sandbox!`
+wire that gate together with a warm VM pool (jolt-vm-pool) and a fanout runtime
+(jolt-fanout) into the N-sandbox execution loop; the CLI in
 `src/jolt/plane/main.clj` boots it.
 
-Standalone: depends only on jolt-admission and jolt-cedar. The daemon
-skeleton (budget + policy wired end to end) is here; the N-sandbox fanout
-loop and the RAP/MCP transport land in nc-FF99 / nc-916C.
+Layers: `gate` (plane, depends on jolt-admission + jolt-cedar only) and the
+runner layer (depends additionally on jolt-vm-pool + jolt-fanout). The runner
+layer (N sandboxes under budget with policy egress) is here; the RAP/MCP
+transport lands in nc-916C.
 
 ## Use
 
@@ -42,6 +45,42 @@ For an identity-scoped policy, the Cedar source is e.g.
 as `(str "permit(principal == Agent::" (char 34) "alice" (char 34) ", action, resource);")`
 or escape the quotes.
 
+### Runner layer (nc-FF99)
+
+```clojure
+(require '[jolt.plane :as plane]
+         '[jolt.vm-pool :as pool]
+         '[jolt.fanout :as fanout])
+
+(def p (plane/new-plane {:budget {:cpu 2 :mem-mb 2048}
+                         :policy-set {:policies [...] :schema {} :entities []}}))
+(def pl (pool/new-pool {:image "oci://example@sha256:abc" :max-live 2}))
+(def rt (fanout/new-runtime {}))
+
+(def runner (plane/new-runner {:plane p :pool pl :fanout rt
+                               :egress {:public {:allow-cidrs ["0.0.0.0/0"]}}}))
+
+;; one sandbox: gate -> spawn -> acquire -> exec -> release -> report
+(plane/run-sandbox! runner
+  {:request-id "req_1" :owner "thr_1"
+   :image "oci://example@sha256:abc"
+   :argv ["/bin/echo" "hello"]
+   :egress {:ref :public}
+   :cpu 1 :mem-mb 512 :timeout-ms 30000})
+;; => {:status :ok :request-id "req_1" :stdout "hello\n" ...}
+;; deny/error surface as {:status :denied|:error} — run-sandbox! never throws.
+
+;; run a batch, one result per request
+(plane/run-all! runner [req1 req2 req3])
+
+(plane/close-runner! runner)
+```
+
+A request's `:egress` is an inline Egress Contract map or `{:ref id}` resolved
+against the runner's `:egress` registry; it is snake-cased (allow-cidrs →
+allow_cidrs) and attached to the per-request Sandbox entity, because Cedar
+reads resource attributes from the entities array, not the request.
+
 ## CLI
 
 ```sh
@@ -56,11 +95,22 @@ jolt run src/jolt/plane/main.clj serve --config examples/plane-config.json
 jolt-cedar's native library is gitignored, so set `JOLT_CEDAR_LIB` to a built
 `libcedar_policy.so` before any command that opens a plane.
 
+## Tests
+
+```sh
+# no KVM: with-redefs microvm start!/stop!, injected exec-hook, real pool+ledger+fanout
+cd ~/projects/jolt/jolt-plane && JOLT_SKIP_MIN_VERSION=1 \
+  JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt \
+  JOLT_CEDAR_LIB=/home/jm/projects/jolt/jolt-cedar/native/target/release/libcedar_policy.so \
+  /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/plane_wiring_test.clj
+```
+
 ## Status
 
 Scaffold (nc-2355): budget + policy wired end to end, CLI + smoke test green.
-Next: nc-FF99 (N sandboxes under budget with policy egress), nc-916C (E2E
-harness over RAP/MCP).
+Runner (nc-FF99): gate + vm-pool + fanout wired, 6 sandboxes under a cpu2
+budget with policy egress — 14/14 green. Next: nc-916C (E2E harness over
+RAP/MCP + push).
 
 ## License
 
