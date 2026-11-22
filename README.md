@@ -23,6 +23,32 @@ invocation has exactly one terminal result, keyed by `call-id`.
 (rap/close! srv)
 ```
 
+## Two server modes
+
+`new-server` takes either a `:vm-pool` (the server owns acquire/exec/release) or
+a `:run-hook` (the caller owns the side effects — used by jolt-plane to run
+invocations through the gate).
+
+```clojure
+;; mode 1 — :vm-pool (server acquires a sandbox and runs argv itself)
+(def srv (rap/new-server {:vm-pool pool :fanout rt}))
+
+;; mode 2 — :run-hook (delegate to the plane runner, which gates + spawns + reports)
+(require '[jolt.plane :as plane])
+(def srv (rap/new-server {:fanout rt
+                          :run-hook (fn [request]
+                                      ;; request = Sandbox Request; return
+                                      ;; {:status :ok|:error|:denied :exit int? :stdout :stderr :error}
+                                      (plane/run-sandbox! runner request))}))
+```
+
+With `:run-hook` the server no longer acquires/releases the vm-pool and no
+longer emits the report Thread Message — the hook owns those side effects; the
+server maps the hook's result to the RAP terminal frame. `:denied` becomes an
+error terminal with error code `"denied"`; `:error` takes its code from the
+`:error` map or `(name :type)`; `:ok` with exit 0 is `"ok"`. See
+`hook-result->frame` in `src/jolt/rap.clj`.
+
 ## Status
 
 Implemented. The server runs Tool Invocations (SPEC.md §3) asynchronously
