@@ -1,0 +1,9 @@
+{:paths ["src"]
+
+ :deps {racklr-dev/jolt-admission
+        {:git/url "https://github.com/racklr-dev/jolt-admission"
+         :git/sha "7576e67a10ae1b425db6a24a7a870410b4113a40"}
+
+        racklr-dev/jolt-cedar
+        {:git/url "https://github.com/racklr-dev/jolt-cedar"
+         :git/sha "2eaafe111343d3457597a144779dba9ed5eaccae"}}}
