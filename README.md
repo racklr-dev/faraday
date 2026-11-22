@@ -25,10 +25,15 @@ an optional cedar policy hook that can veto an emit before it is appended.
 
 ## Status
 
-Scaffold — the public API is pinned and tested, bodies throw `:not-implemented`.
-The runtime implementation lands in the next card. Note: deps.edn currently
-pins jolt-ledger via `:local/root` so the scaffold tests run before push; swap
-it to a pinned `:git/sha` before publishing.
+Implemented. The runtime shapes Thread Messages (SPEC.md §1) and appends them
+via jolt-ledger: `spawn`/`inherit` mint a new thread (fresh `thread-id`, `parent-id`
+links the tree), `report`/`yield` append into an existing `thread-id`, and `emit`
+appends any already-shaped message. A `:policy-hook` (if given) vetoes an emit
+before it reaches the ledger (`:policy-vetoed`). The test runs against a real
+ledger (no mocks) — `test/jolt/fanout_test.clj`.
+
+Note: deps.edn currently pins jolt-ledger via `:local/root` so tests run before
+push; swap it to a pinned `:git/sha` before publishing.
 
 ## License
 
