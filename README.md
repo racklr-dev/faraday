@@ -32,6 +32,11 @@ appends any already-shaped message. A `:policy-hook` (if given) vetoes an emit
 before it reaches the ledger (`:policy-vetoed`). The test runs against a real
 ledger (no mocks) — `test/jolt/fanout_test.clj`.
 
+Integration gate:
+`cd jolt-fanout && jolt run test/jolt/fanout_integration_test.clj` — builds a
+fanout tree (spawn + inherit), closes and reopens the ledger, then reconstructs
+the parent→children edges and verifies the tree and payloads round-tripped.
+
 Note: deps.edn currently pins jolt-ledger via `:local/root` so tests run before
 push; swap it to a pinned `:git/sha` before publishing.
 
