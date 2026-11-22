@@ -6,4 +6,12 @@
 
         racklr-dev/jolt-cedar
         {:git/url "https://github.com/racklr-dev/jolt-cedar"
-         :git/sha "2eaafe111343d3457597a144779dba9ed5eaccae"}}}
+         :git/sha "2eaafe111343d3457597a144779dba9ed5eaccae"}
+
+        racklr-dev/jolt-vm-pool
+        {:git/url "https://github.com/racklr-dev/jolt-vm-pool"
+         :git/sha "be1ef10e84a8878921d50093517aa51a99dadaf7"}
+
+        racklr-dev/jolt-fanout
+        {:git/url "https://github.com/racklr-dev/jolt-fanout"
+         :git/sha "1de939ad40c1ed5e3ad1e02e9a2fb80d83db3500"}}}

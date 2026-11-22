@@ -9,7 +9,10 @@
   timeout surfaces as ex-info with :type :policy-deny or :admission-denied."
   (:require [clojure.string :as str]
             [jolt.admission :as adm]
-            [jolt.cedar :as cedar]))
+            [jolt.cedar :as cedar]
+            [jolt.vm-pool :as pool]
+            [jolt.fanout :as fanout]
+            [jolt.microvm :as microvm]))
 
 (defrecord Plane [config admission authorizer policy-text entities closed])
 
@@ -58,7 +61,8 @@
   (cedar/authorized? (:authorizer plane)
                      (select-keys request [:principal :action :resource :context])
                      (:policy-text plane)
-                     (:entities plane)))
+                     (vec (concat (or (:entities plane) [])
+                                  (or (:request-entities request) [])))))
 
 (defn decide
   "The cedar decision alone: :allow, :deny or :error."
@@ -112,4 +116,162 @@
     (reset! (:closed plane) true)
     (cedar/close! (:authorizer plane))
     (adm/close! (:admission plane)))
+  nil)
+
+;; -- runner: wire the plane gate + vm-pool + fanout ---------------------------
+
+(defrecord Runner [plane pool fanout exec-hook egress emit-lock])
+
+(defn- shell-quote
+  "Single-quote one argv element for the guest shell."
+  [s]
+  (let [q "'" dq (str (char 34))]
+    (str q (str/replace (str s) q (str q dq q dq q)) q)))
+
+(defn- argv->command
+  "Shell-quote a Sandbox Request argv into one command string for microvm/exec."
+  [argv]
+  (when-not (seq argv)
+    (fail! "request :argv must be a non-empty vector" {:argv argv}))
+  (str/join " " (map shell-quote argv)))
+
+(defn- ->cedar-egress
+  "Normalize a SPEC section 4 Egress Contract to Cedar-safe attribute keys
+  (Cedar attribute names are identifiers, so hyphens become underscores)."
+  [e]
+  (when e
+    (->> {:egress_id (:egress-id e)
+          :dns (:dns e)
+          :allow_cidrs (:allow-cidrs e)
+          :deny_cidrs (:deny-cidrs e)
+          :host_gateway (:host-gateway e)
+          :default (:default e)}
+         (remove (fn [[_ v]] (nil? v)))
+         (into {}))))
+
+(defn- egress-inline
+  "Resolve a request's :egress (inline contract or {:ref id}) against the
+  runner's :egress registry; returns the inline contract map or nil."
+  [runner request]
+  (let [eg (:egress request)
+        reg (or (:egress runner) {})]
+    (cond
+      (nil? eg) nil
+      (:ref eg) (or (get reg (:ref eg))
+                    (fail! (str "unknown egress ref " (pr-str (:ref eg)))
+                           {:type :egress-unknown :ref (:ref eg)}))
+      :else eg)))
+
+(defn- gate-request
+  "Turn a Sandbox Request (SPEC section 2) into a plane/gate request: the
+  Cedar principal/action/resource (with the egress contract attached as the
+  resource entity's attributes) plus the admission fields (:owner :cost
+  :priority :timeout-ms). Cedar reads resource attributes from the entities
+  array, not the request, so the sandbox is a per-request entity here."
+  [runner request]
+  (let [request-id (or (:request-id request)
+                       (fail! "request requires :request-id" {:request request}))
+        eg (->cedar-egress (egress-inline runner request))
+        attrs (cond-> {}
+                (:image request) (assoc :image (:image request))
+                eg (assoc :egress eg))]
+    {:request-id request-id
+     :principal {:type "Agent" :id (or (:owner request) request-id)}
+     :action {:type "Action" :id "RunSandbox"}
+     :resource {:type "Sandbox" :id request-id}
+     :context (cond-> {:request-id request-id}
+                (:owner request) (assoc :owner (:owner request)))
+     :request-entities [{:uid {:type "Sandbox" :id request-id}
+                         :attrs attrs
+                         :parents []}]
+     :owner (or (:owner request) request-id)
+     :cost {:cpu (or (:cpu request) 1) :mem-mb (or (:mem-mb request) 512)}
+     :priority (or (:priority request) 0)
+     :timeout-ms (or (:timeout-ms request) 0)}))
+
+(defn- default-exec
+  "Run a sandbox request's argv on the acquired handle's live VM. Returns
+  {:stdout :stderr :exit}."
+  [h request]
+  (microvm/exec (:vm h)
+                (argv->command (:argv request))
+                :timeout-ms (or (:timeout-ms request) 300000)))
+
+(defn new-runner
+  "Wire a plane, a vm-pool and a fanout runtime into a runner. opts: :plane
+  :pool :fanout (required), :exec-hook (fn handle request -> {:exit :stdout
+  :stderr}; default microvm/exec over the handle's VM), :egress (egress-id ->
+  Egress Contract map, resolved for {:ref id} requests)."
+  [opts]
+  (let [pl (:plane opts)
+        p (:pool opts)
+        rt (:fanout opts)]
+    (when-not pl (fail! "new-runner requires a :plane" {:opts opts}))
+    (when-not p (fail! "new-runner requires a :pool" {:opts opts}))
+    (when-not rt (fail! "new-runner requires a :fanout" {:opts opts}))
+    (->Runner pl p rt (or (:exec-hook opts) default-exec)
+              (or (:egress opts) {}) (Object.))))
+
+(defn run-sandbox!
+  "Run one Sandbox Request (SPEC section 2) end to end under the runner: gate
+  (Cedar policy + admission budget), spawn a thread, acquire a sandbox, exec
+  argv, release the sandbox and the permit, report. Returns a result map
+  {:status :ok|:error|:denied ...}; never throws for a policy or admission
+  deny."
+  [runner request]
+  (let [pl (:plane runner)
+        p (:pool runner)
+        rt (:fanout runner)
+        exec (:exec-hook runner)]
+    (try
+      (let [g (gate pl (gate-request runner request))
+            permit (:permit g)]
+        (try
+          (let [spawn-msg (locking (:emit-lock runner)
+                            (fanout/spawn rt (:parent-id request) request (:memo-key request)))
+                thread-id (:thread-id spawn-msg)
+                h (pool/acquire p request)
+                r (exec h request)]
+            (pool/release p h)
+            (let [status (if (zero? (:exit r)) "ok" "error")
+                  report (locking (:emit-lock runner)
+                           (fanout/report rt thread-id status
+                                          {:exit (:exit r) :stdout (:stdout r) :stderr (:stderr r)}
+                                          [{:type "text" :content (or (:stdout r) "")}]))]
+              {:status (if (zero? (:exit r)) :ok :error)
+               :request-id (:request-id request)
+               :thread-id thread-id
+               :report report
+               :exit (:exit r)}))
+          (finally
+            (release pl permit))))
+      (catch Exception e
+        (let [d (ex-data e)
+              t (:type d)]
+          (cond
+            (= :policy-deny t)
+            {:status :denied :type :policy-deny :decision (:decision d) :request-id (:request-id request)}
+            (= :admission-denied t)
+            {:status :denied :type :admission-denied :request-id (:request-id request)}
+            :else
+            {:status :error :type t :request-id (:request-id request) :error (ex-message e)}))))))
+
+(defn run-all!
+  "Run N Sandbox Requests concurrently; the admission budget bounds how many
+  sandboxes are live at once and the pool bounds warm VMs. Returns a vector of
+  run! result maps, one per request."
+  [runner requests]
+  ;; jolt installs JDK class providers lazily; touch the classes fanout uses
+  ;; here, single-threaded, so the futures below do not race on first use.
+  (str (java.time.Instant/now))
+  (str (java.util.UUID/randomUUID))
+  (mapv deref (mapv (fn [r] (future (run-sandbox! runner r))) requests)))
+
+(defn close-runner!
+  "Close the runner: pool first, then the plane. The fanout runtime (and its
+  ledger) are borrowed and left open."
+  [runner]
+  (when (map? runner)
+    (pool/close! (:pool runner))
+    (close! (:plane runner)))
   nil)
