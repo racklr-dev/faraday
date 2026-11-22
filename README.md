@@ -30,8 +30,18 @@ Standalone: nothing else in the control plane is required. It implements
 
 ## Status
 
-Scaffold — the public API is pinned and tested, bodies throw `:not-implemented`.
-The durable implementation lands in the next card.
+Implemented — durable SQLite storage (via `jolt-lang/db`), per-thread monotonic
+`seq` assignment, `msg-id` dedup, and history/processed/last-seq queries. The
+message body is stored as canonical wire JSON (contract keys in SPEC order, then
+any extra keys sorted), read back as keyword-keyed maps. `append!` is atomic
+(`BEGIN IMMEDIATE`): the dedup check and seq assignment are one transaction, so
+a redelivery is an idempotent no-op that returns the original `{:seq n,
+:deduped? true}`. The ledger is the single writer; one handle is one SQLite
+connection.
+
+Run the suite: `cd jolt-ledger && jolt run test/jolt/ledger_test.clj` — 47
+checks: seq assignment, redelivery dedup, cross-thread independence, persistence
+across close/reopen, the SPEC.md §1 canonical example, and validation errors.
 
 ## License
 
