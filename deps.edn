@@ -1,0 +1,9 @@
+{:paths ["src"]
+
+ :deps {racklr-dev/jolt-fanout
+        ;; TODO(publish): swap to a pinned :git/sha once jolt-fanout is pushed.
+        {:local/root "../jolt-fanout"}
+
+        racklr-dev/jolt-vm-pool
+        ;; TODO(publish): swap to a pinned :git/sha once jolt-vm-pool is pushed.
+        {:local/root "../jolt-vm-pool"}}}
