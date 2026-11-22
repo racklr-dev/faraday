@@ -33,10 +33,26 @@ report Thread Message via fanout, and delivers exactly one terminal result.
 attach on invoke; late ones replay the stored terminal). `cancel`/`close`
 short-circuit in-flight calls with a terminal cancelled frame; `close!` releases
 a subscription or stops the server. The test fakes only vm-pool/microvm and runs
-against a real ledger/fanout — `test/jolt/rap_test.clj`.
+against a real ledger/fanout — `test/jolt/rap_test.clj`. The integration
+test (`test/jolt/rap_integration.clj`) drives a real KVM microVM through a
+real vm-pool and asserts the async terminal result lands via `on-result`.
 
 deps.edn pins jolt-fanout and jolt-vm-pool to their published `:git/sha` values
 on `https://github.com/racklr-dev`.
+
+## Running the tests
+
+Unit test (fakes vm-pool/microvm, real ledger/fanout):
+
+    cd jolt-rap && JOLT_SKIP_MIN_VERSION=1 JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/rap_test.clj
+
+Integration test (real KVM, async result over rap -> vm-pool -> microvm):
+
+    cd jolt-rap && sudo -u jm --preserve-env env JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt PATH=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux:$PATH /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/rap_integration.clj
+
+Prerequisites: /dev/kvm writable (jm in the kvm group) and a jolt binary at
+JOLT_BIN that satisfies the 0.8.28 floor. Never run under `sg kvm`: it makes
+kvm the primary gid and libkrun virtio-fs guest writes fail EPERM.
 
 ## License
 
