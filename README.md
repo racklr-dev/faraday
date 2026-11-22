@@ -30,8 +30,15 @@ Standalone: no control-plane dependency. Keys are opaque hex strings.
 
 ## Status
 
-Scaffold — the public API is pinned and tested, bodies throw `:not-implemented`.
-The content-hash implementation lands in the next card.
+Implemented — content-addressed cache over a pure-Clojure SHA-256 (vendored
+from racklr-dev/jolt-merkle @ 06e135f). A 26-check behavior suite is green
+(`jolt run test/jolt/memo_test.clj`): FIPS 180-4 KATs, canonical keying (map
+and set order insensitive, vector order sensitive), put!/get/contains?/
+delete!/stats round-trips, and idempotent re-put.
+
+No runtime deps (`{:paths ["src"]}`). The SHA-256 lives in the private
+namespaces `jolt.memo.sha256` and `jolt.memo.bit`, so a memo keeps a
+zero-dependency graph.
 
 ## License
 
