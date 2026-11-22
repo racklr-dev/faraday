@@ -25,10 +25,18 @@ invocation has exactly one terminal result, keyed by `call-id`.
 
 ## Status
 
-Scaffold — the public API is pinned and tested, bodies throw `:not-implemented`.
-The server implementation lands in the next card. Note: deps.edn currently
-pins jolt-fanout and jolt-vm-pool via `:local/root` so the scaffold tests run
-before push; swap both to pinned `:git/sha` values before publishing.
+Implemented. The server runs Tool Invocations (SPEC.md §3) asynchronously
+against the vm-pool: `invoke` builds a Sandbox Request from the call args,
+acquires a sandbox, runs the shell-quoted argv, releases the sandbox, emits a
+report Thread Message via fanout, and delivers exactly one terminal result.
+`subscribe`/`on-result` work before or after `invoke` (pending subscriptions
+attach on invoke; late ones replay the stored terminal). `cancel`/`close`
+short-circuit in-flight calls with a terminal cancelled frame; `close!` releases
+a subscription or stops the server. The test fakes only vm-pool/microvm and runs
+against a real ledger/fanout — `test/jolt/rap_test.clj`.
+
+Note: deps.edn currently pins jolt-fanout and jolt-vm-pool via `:local/root` so
+tests run before push; swap both to pinned `:git/sha` values before publishing.
 
 ## License
 
