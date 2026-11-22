@@ -31,8 +31,18 @@ Permit seam, SPEC.md §5).
 
 ## Status
 
-Scaffold — the public API is pinned and tested, bodies throw `:not-implemented`.
-The pool implementation lands in the next card.
+Implemented. The pool keeps a bounded warm set of microVMs keyed by image,
+reuses the most recently released warm VM on acquire, evicts the
+least-recently-released past `:max-warm`, and hibernates/restores via
+jolt-microvm snapshots. The unit test (`test/jolt/vm_pool_test.clj`) runs
+with in-memory fakes for jolt-microvm, so it needs no KVM.
+
+The pool owns VM lifecycle only. To run a request's argv, execute against the
+handle's live VM: `(jolt.microvm/exec (:vm handle) argv ...)`.
+
+Known MVP limits: request mount `readonly` is ignored (microvm mounts are
+read/write); a released warm VM keeps its guest state (warm reuse); no
+liveness probe on reuse.
 
 ## License
 
