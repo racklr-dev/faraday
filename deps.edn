@@ -1,5 +1,5 @@
 {:paths ["src"]
 
  :deps {racklr-dev/jolt-ledger
-        ;; TODO(publish): swap to a pinned :git/sha once jolt-ledger is pushed.
-        {:local/root "../jolt-ledger"}}}
+        {:git/url "https://github.com/racklr-dev/jolt-ledger"
+         :git/sha "41e2e0496af7193e27b39752a9bbfa4cad2ec820"}}}
