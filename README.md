@@ -37,8 +37,8 @@ Integration gate:
 fanout tree (spawn + inherit), closes and reopens the ledger, then reconstructs
 the parent→children edges and verifies the tree and payloads round-tripped.
 
-Note: deps.edn currently pins jolt-ledger via `:local/root` so tests run before
-push; swap it to a pinned `:git/sha` before publishing.
+deps.edn pins jolt-ledger to its published `:git/sha` on
+`https://github.com/racklr-dev/jolt-ledger`.
 
 ## License
 
