@@ -18,7 +18,7 @@
             [jolt.fanout :as fanout]
             [clojure.string :as str]))
 
-(defrecord Server [vm-pool fanout policy-hook state])
+(defrecord Server [vm-pool fanout policy-hook run-hook state])
 (defrecord Subscription [server call-id sub-id])
 
 ;; -- helpers -----------------------------------------------------------------
@@ -70,6 +70,36 @@
 (defn- cancelled-frame [call-id]
   (terminal-frame call-id "cancelled" [] nil nil))
 
+(defn- hook-result->frame
+  "Map a :run-hook result to a terminal frame. The hook is (fn request ->
+  {:status :ok|:error|:denied :exit int? :stdout string? :stderr string?
+   :error map?}); it owns the side effects (spawn/report), so the server only
+  translates its result here. :denied maps to an error terminal with a denied
+  error code, keeping the RAP envelope SPEC-faithful (ok|error|cancelled)."
+  [call-id r]
+  (let [status (case (:status r)
+                 :ok "ok"
+                 :denied "error"
+                 :error "error"
+                 "error")
+        exit (:exit r)
+        err (cond
+              (= :denied (:status r))
+              {:message "sandbox denied by policy or budget" :code "denied"}
+
+              (= :error (:status r))
+              {:message (or (when (string? (:error r)) (:error r))
+                            (when (map? (:error r)) (:message (:error r)))
+                            "sandbox error")
+               :code (or (when (map? (:error r)) (:code (:error r)))
+                         (some-> (:type r) name)
+                         "error")}
+
+              :else nil)]
+    (terminal-frame call-id status
+                    (result->segments {:stdout (:stdout r) :stderr (:stderr r)})
+                    exit err)))
+
 (defn- call-at [srv call-id]
   (get-in @(:state srv) [:calls call-id]))
 
@@ -97,50 +127,62 @@
           true)))))
 
 (defn- run-invocation!
-  "The async worker for one call-id: acquire a sandbox, run the argv, release,
-  emit a report Thread Message, and deliver the terminal frame."
+  "The async worker for one call-id. With a :run-hook the server delegates the
+  acquire/exec/release/report side effects to the hook and maps its result to
+  the terminal frame; otherwise it acquires a sandbox, runs the argv, releases,
+  emits a report Thread Message, and delivers the terminal frame."
   [srv call-id]
-  (let [{:keys [call thread-id]} (call-at srv call-id)]
+  (let [{:keys [call thread-id]} (call-at srv call-id)
+        hook (:run-hook srv)]
     (when call
       (if (get-in @(:state srv) [:calls call-id :cancelled?])
         (claim-terminal! srv call-id (cancelled-frame call-id))
         (let [frame (try
-                      (let [request (call->request call-id call)
-                            h (pool/acquire (:vm-pool srv) request)]
-                        (try
-                          (let [r (microvm/exec (:vm h)
-                                                (argv->cmd (get-in call [:args :argv]))
-                                                :timeout-ms (or (:timeout-ms request) 300000))
-                                segs (result->segments r)
-                                ok? (zero? (:exit r))]
-                            (terminal-frame call-id (if ok? "ok" "error") segs (:exit r)
-                                            (when-not ok? {:message (str "command exited " (:exit r)) :code "exit"})))
-                          (finally (pool/release (:vm-pool srv) h))))
+                      (let [request (call->request call-id call)]
+                        (if hook
+                          (hook-result->frame call-id (hook request))
+                          (let [h (pool/acquire (:vm-pool srv) request)]
+                            (try
+                              (let [r (microvm/exec (:vm h)
+                                                    (argv->cmd (get-in call [:args :argv]))
+                                                    :timeout-ms (or (:timeout-ms request) 300000))
+                                    segs (result->segments r)
+                                    ok? (zero? (:exit r))]
+                                (terminal-frame call-id (if ok? "ok" "error") segs (:exit r)
+                                                (when-not ok? {:message (str "command exited " (:exit r)) :code "exit"})))
+                              (finally (pool/release (:vm-pool srv) h))))))
                       (catch Exception e
                         (terminal-frame call-id "error" [] nil
                                         {:message (or (ex-message e) "invocation failed")})))]
           (if (get-in @(:state srv) [:calls call-id :cancelled?])
-            (do (try (fanout/report (:fanout srv) thread-id "cancelled" nil []) (catch Exception _ nil))
+            (do (when-not hook
+                  (try (fanout/report (:fanout srv) thread-id "cancelled" nil []) (catch Exception _ nil)))
                 (claim-terminal! srv call-id (cancelled-frame call-id)))
-            (do (try (fanout/report (:fanout srv) thread-id (:status frame)
-                                    {:exit-code (:exit-code frame)} (:segments frame))
-                     (catch Exception _ nil))
+            (do (when-not hook
+                  (try (fanout/report (:fanout srv) thread-id (:status frame)
+                                      {:exit-code (:exit-code frame)} (:segments frame))
+                       (catch Exception _ nil)))
                 (claim-terminal! srv call-id frame))))))))
 
 ;; -- public API --------------------------------------------------------------
 
 (defn new-server
-  "Open a tool server over opts, a map with :vm-pool (jolt-vm-pool handle),
-  :fanout (jolt-fanout runtime), and optionally :policy-hook (fn call -> truthy
-  to permit, nil = always permit). Returns an opaque server handle."
+  "Open a tool server over opts, a map with :fanout (jolt-fanout runtime) and
+  either :vm-pool (jolt-vm-pool handle) or :run-hook (fn request -> {:status
+  :ok|:error|:denied :exit int? :stdout string? :stderr string? :error map?}),
+  plus an optional :policy-hook (fn call -> truthy to permit, nil = always
+  permit). When :run-hook is given it replaces the acquire/exec/release path
+  and owns the Thread Message reporting; the server only maps its result to the
+  terminal frame. Returns an opaque server handle."
   [opts]
   (let [vp (:vm-pool opts)
-        rt (:fanout opts)]
-    (when-not vp
-      (fail! "new-server requires a :vm-pool" {:opts opts}))
+        rt (:fanout opts)
+        hook (:run-hook opts)]
+    (when-not (or vp hook)
+      (fail! "new-server requires a :vm-pool or a :run-hook" {:opts opts}))
     (when-not rt
       (fail! "new-server requires a :fanout" {:opts opts}))
-    (->Server vp rt (:policy-hook opts) (atom {:calls {} :pending {} :sub-seq 0}))))
+    (->Server vp rt (:policy-hook opts) hook (atom {:calls {} :pending {} :sub-seq 0}))))
 
 (defn invoke
   "Start the Tool Invocation call (SPEC.md §3). Assigns a call-id if absent and
