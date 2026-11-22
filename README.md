@@ -10,8 +10,8 @@ wire that gate together with a warm VM pool (jolt-vm-pool) and a fanout runtime
 
 Layers: `gate` (plane, depends on jolt-admission + jolt-cedar only) and the
 runner layer (depends additionally on jolt-vm-pool + jolt-fanout). The runner
-layer (N sandboxes under budget with policy egress) is here; the RAP/MCP
-transport lands in nc-916C.
+layer (N sandboxes under budget with policy egress) and the RAP/MCP transport
+(nc-916C: a RAP server drives N tool invocations through the runner) are here.
 
 ## Use
 
@@ -103,14 +103,18 @@ cd ~/projects/jolt/jolt-plane && JOLT_SKIP_MIN_VERSION=1 \
   JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt \
   JOLT_CEDAR_LIB=/home/jm/projects/jolt/jolt-cedar/native/target/release/libcedar_policy.so \
   /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/plane_wiring_test.clj
+
+# E2E: a RAP server drives N sandboxes through the gate (no KVM)
+  /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/plane_e2e_test.clj
 ```
 
 ## Status
 
 Scaffold (nc-2355): budget + policy wired end to end, CLI + smoke test green.
 Runner (nc-FF99): gate + vm-pool + fanout wired, 6 sandboxes under a cpu2
-budget with policy egress — 14/14 green. Next: nc-916C (E2E harness over
-RAP/MCP + push).
+budget with policy egress — 14/14 green. E2E (nc-916C): RAP server wired to
+the runner via :run-hook, 6 concurrent tool invocations driven through the
+gate — 10/10 green, and the repo is pushed to racklr-dev/jolt-plane.
 
 ## License
 
