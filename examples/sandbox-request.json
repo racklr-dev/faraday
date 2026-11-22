@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "request-id": "req_01J8VK2Q",
+  "image": "oci://ghcr.io/jolt-lang/distroless-base@sha256:abc...",
+  "argv": ["/bin/sh", "-c", "echo ok"],
+  "env": { "PATH": "/usr/bin" },
+  "mounts": [ { "host-path": "/data", "tag": "data", "readonly": false } ],
+  "cpu": 1,
+  "mem-mb": 512,
+  "timeout-ms": 30000,
+  "egress": { "ref": "egr_01J8VK2Q" },
+  "stdin": null
+}

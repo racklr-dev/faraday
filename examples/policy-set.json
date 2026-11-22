@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "policies": ["permit(principal, action, resource) when { true };"],
+  "schema": "{}",
+  "entities": [],
+  "context": {}
+}
