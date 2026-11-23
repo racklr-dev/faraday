@@ -40,6 +40,10 @@
 (check "history defined" true (fn? ledger/history))
 (check "processed? defined" true (fn? ledger/processed?))
 (check "last-seq defined" true (fn? ledger/last-seq))
+(check "put-pointer! defined" true (fn? ledger/put-pointer!))
+(check "pointer defined" true (fn? ledger/pointer))
+(check "delete-pointer! defined" true (fn? ledger/delete-pointer!))
+(check "pointers defined" true (fn? ledger/pointers))
 (check "close! defined" true (fn? ledger/close!))
 
 ;; --- seq assignment + history + dedup ---------------------------------------
@@ -112,6 +116,32 @@
         (check "reopen: redelivery still dedups"
                {:seq 0 :deduped? true}
                (ledger/append! db2 (msg "t1" "p1")))
+        (finally (ledger/close! db2))))))
+
+;; --- durable named pointers ------------------------------------------------
+
+(with-ledger
+  (fn [db _]
+    (check "pointer absent initially" nil (ledger/pointer db "loop/active"))
+    (check "put-pointer! returns value" "k1" (ledger/put-pointer! db "loop/active" "k1"))
+    (check "pointer reads back" "k1" (ledger/pointer db "loop/active"))
+    (check "put-pointer! replaces in place" "k2" (ledger/put-pointer! db "loop/active" "k2"))
+    (check "pointer re-pointed" "k2" (ledger/pointer db "loop/active"))
+    (check "pointer holds EDN maps" {:k 1} (ledger/put-pointer! db "m" {:k 1}))
+    (check "pointer EDN round-trip" {:k 1} (ledger/pointer db "m"))
+    (check "all pointers" {"loop/active" "k2" "m" {:k 1}} (ledger/pointers db))
+    (check "delete-pointer! present" true (ledger/delete-pointer! db "m"))
+    (check "delete-pointer! absent" false (ledger/delete-pointer! db "m"))
+    (check "pointer nil after delete" nil (ledger/pointer db "m"))
+    (check "all pointers after delete" {"loop/active" "k2"} (ledger/pointers db))))
+
+(with-ledger
+  (fn [db path]
+    (ledger/put-pointer! db "loop/active" "k1")
+    (ledger/close! db)
+    (let [db2 (ledger/new-ledger {:path path})]
+      (try
+        (check "pointer persists across reopen" "k1" (ledger/pointer db2 "loop/active"))
         (finally (ledger/close! db2))))))
 
 ;; --- SPEC.md §1 canonical example round-trip ---------------------------------

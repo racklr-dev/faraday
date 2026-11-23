@@ -12,7 +12,8 @@
   dedups on msg-id, and answers history/processed queries. Storage is
   delegated to jolt-lang/db (SQLite through db.sqlite)."
   (:require [db.sqlite :as sql]
-            [clojure.data.json :as json]))
+            [clojure.data.json :as json]
+            [clojure.edn :as edn]))
 
 (def ^:private kinds
   "The Thread Message kinds SPEC.md §1 accepts."
@@ -115,6 +116,9 @@
       (sql/query conn
                  "create table if not exists threads (thread_id text primary key, last_seq integer not null)"
                  [])
+      (sql/query conn
+                 "create table if not exists pointers (name text primary key, value text not null, ts text not null)"
+                 [])
       {:conn conn :path path :closed (atom false)}
       (catch Throwable t
         (try (sql/close conn) (catch Throwable _))
@@ -174,6 +178,51 @@
                               "select last_seq from threads where thread_id = ?"
                               [thread-id]))]
     (when row (:last_seq row))))
+
+;; -- durable named pointers -------------------------------------------------
+;; A pointer is a durable, single-writer head under a stable name: exactly
+;; the mechanism a gate needs to re-point the live loop on promote/rollback.
+;; Values are EDN, so a pointer can hold a memo key string, a manifest map,
+;; or any plain-data head a control plane needs to remember.
+
+(defn put-pointer!
+  "Durably point name at value (EDN), replacing any previous pointer of the
+  same name in place. Returns value."
+  [ledger name value]
+  (let [conn (:conn ledger)
+        ts (str (java.time.Instant/now))
+        text (pr-str value)]
+    (sql/query conn
+               "insert into pointers (name, value, ts) values (?, ?, ?) on conflict(name) do update set value = excluded.value, ts = excluded.ts"
+               [name text ts])
+    value))
+
+(defn pointer
+  "The value name points at, or nil if there is no such pointer."
+  [ledger name]
+  (let [row (first (sql/query (:conn ledger)
+                              "select value from pointers where name = ?"
+                              [name]))]
+    (when row
+      (edn/read-string (:value row)))))
+
+(defn delete-pointer!
+  "Remove name's pointer. Returns true if it was present, false otherwise."
+  [ledger name]
+  (let [conn (:conn ledger)
+        had (boolean (seq (sql/query conn
+                                     "select 1 from pointers where name = ?"
+                                     [name])))]
+    (sql/query conn "delete from pointers where name = ?" [name])
+    had))
+
+(defn pointers
+  "All pointers, as a name -> value map."
+  [ledger]
+  (reduce (fn [m row]
+            (assoc m (:name row) (edn/read-string (:value row))))
+          {}
+          (sql/query (:conn ledger) "select name, value from pointers order by name" [])))
 
 (defn close!
   "Flush and close the ledger. Idempotent: a second close is a no-op."

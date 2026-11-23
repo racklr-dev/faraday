@@ -3,5 +3,11 @@
  :deps {racklr-dev/faraday-contracts
         {:local/root "../contracts"}
 
+        racklr-dev/faraday-memo
+        {:local/root "../memo"}
+
+        racklr-dev/faraday-ledger
+        {:local/root "../ledger"}
+
         racklr-dev/faraday-rap
         {:local/root "../rap"}}}
