@@ -1,4 +1,4 @@
-# jolt-plane data contracts — canonical wire spec
+# faraday data contracts — canonical wire spec
 
 Version 1.0. This document is the single pin for every data shape that crosses a
 component boundary in the jolt control plane. Each library owns its logic; this
@@ -26,11 +26,11 @@ file owns the bytes between libraries.
 
 | contract | produced by | consumed by | MVP? |
 |---|---|---|---|
-| 1. Thread Message | jolt-fanout | jolt-ledger, jolt-fanout, jolt-rap | yes |
-| 2. Sandbox Request | jolt-fanout | jolt-vm-pool | yes |
-| 3. Tool Invocation | jolt-rap | jolt-fanout, jolt-rap | yes |
-| 4. Egress Contract | operator/config | jolt-vm-pool, jolt-tapmasq | yes |
-| 5. Budget Permit | jolt-admission | jolt-vm-pool, jolt-fanout | deferred |
+| 1. Thread Message | faraday-fanout | faraday-ledger, faraday-fanout, faraday-rap | yes |
+| 2. Sandbox Request | faraday-fanout | faraday-pool | yes |
+| 3. Tool Invocation | faraday-rap | faraday-fanout, faraday-rap | yes |
+| 4. Egress Contract | operator/config | faraday-pool, jolt-tapmasq | yes |
+| 5. Budget Permit | jolt-admission | faraday-pool, faraday-fanout | deferred |
 | 6. Policy Set | operator/config | jolt-cedar | deferred |
 
 Deferred contracts are the optional security seams: they are pinned now so the
@@ -41,7 +41,7 @@ blocked on them.
 
 ## 1. Thread Message
 
-The unit of state and control flow. jolt-fanout emits these; jolt-ledger stores
+The unit of state and control flow. faraday-fanout emits these; faraday-ledger stores
 them, assigns the sequence number, and dedups on `msg-id`. One logical thread is
 one tree of messages rooted at a `thread-id`.
 
@@ -91,9 +91,9 @@ Kind payloads (all objects; a reader of an unknown `kind` rejects):
 
 ## 2. Sandbox Request
 
-Boot-and-run spec handed to jolt-vm-pool. Immutable once issued; a request id
+Boot-and-run spec handed to faraday-pool. Immutable once issued; a request id
 must not be reissued. The pool returns a sandbox handle, not the guest output
-(streamed output follows the Tool Invocation contract via jolt-rap).
+(streamed output follows the Tool Invocation contract via faraday-rap).
 
 ```json
 {

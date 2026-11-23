@@ -1,4 +1,4 @@
-# jolt-contracts
+# faraday-contracts
 
 The canonical data contracts for the jolt control plane. This repo is a spec,
 not a library: it holds `SPEC.md` (the pin) and `examples/` (canonical JSON test
