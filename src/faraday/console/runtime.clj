@@ -2,13 +2,13 @@
 ;; + libkrun 2.0): plane + pool stats, gate decisions, runs through the RAP
 ;; run-hook (default plane exec = in-guest ssh exec), calls, threads,
 ;; policies, egress, and the actions submit-run!, cancel!, dry-run.
-(ns jolt.dashboard.runtime
+(ns faraday.console.runtime
   (:require [clojure.string :as str]
-            [jolt.plane :as plane]
-            [jolt.vm-pool :as pool]
-            [jolt.fanout :as fanout]
-            [jolt.ledger :as ledger]
-            [jolt.rap :as rap]))
+            [faraday.core :as plane]
+            [faraday.pool :as pool]
+            [faraday.fanout :as fanout]
+            [faraday.ledger :as ledger]
+            [faraday.rap :as rap]))
 
 (def q (str (char 34)))
 
@@ -49,7 +49,7 @@
   "Open the plane stack. opts: :on-run (fn call result) fires when a run
   completes through the RAP run-hook, with the full run-sandbox! result."
   [opts]
-  (let [root (str "/tmp/jolt-dashboard-" (System/nanoTime))
+  (let [root (str "/tmp/faraday-console-" (System/nanoTime))
         db (ledger/new-ledger {:path (str root "/ledger.db")})
         fan (fanout/new-runtime {:ledger db})
         pl (pool/new-pool {:image image :cache-dir "/home/jm/.cache/jolt-microvm" :max-warm 4})

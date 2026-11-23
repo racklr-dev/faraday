@@ -1,11 +1,11 @@
-;; jolt-dashboard entrypoint: open the real plane stack (no KVM), sample it
+;; faraday-console entrypoint: open the real plane stack (no KVM), sample it
 ;; into the board ratom, drive a rotating demo through the RAP run-hook so
 ;; every view has live data, and serve the Datastar UI over ring-chez-adapter.
-(ns jolt.dashboard.main
+(ns faraday.console.main
   (:require [jolt.datastar.core :as ds]
-            [jolt.dashboard.board :as board]
-            [jolt.dashboard.handler :as handler]
-            [jolt.dashboard.runtime :as rt]
+            [faraday.console.board :as board]
+            [faraday.console.handler :as handler]
+            [faraday.console.runtime :as rt]
             [ring-chez.adapter :as adapter]
             [ring-chez.middleware.gzip :as gzip]))
 

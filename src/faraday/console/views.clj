@@ -2,14 +2,15 @@
 ;; Each view section is gated by data-show on the client-side $view signal, so
 ;; nav switching is instant (no round-trip); the SSE stream patches the live
 ;; data inside whichever view is open.
-(ns jolt.dashboard.views
+(ns faraday.console.views
   (:require [clojure.string :as str]
             [jolt.datastar.html :as h]))
 
 (def nav-items
   [["overview" "Overview"] ["runs" "Runs"] ["agents" "Agents"]
    ["threads" "Threads"] ["vms" "VMs"] ["policy" "Policy"]
-   ["egress" "Egress"]])
+   ["egress" "Egress"]
+   ["bench" "Benchmarks"]])
 
 (declare dry-result thread-detail)
 
@@ -220,6 +221,41 @@
         [:td (str/join ", " (or (:deny-cidrs e) []))]
         [:td (str (:host-gateway e))]])]]])
 
+(defn- fmt1 [x]
+  (when x (str (/ (long (Math/round (* 10.0 (double x)))) 10.0))))
+
+(defn bench-panel [b]
+  (let [bench (:bench b)
+        waves (:waves bench)]
+    [:section {:id "view-bench" :class "view" :data-show "$view == 'bench'"}
+     [:h2 "Benchmarks (loadtest)"]
+     (if (seq waves)
+       [:div
+        [:div {:class "card"}
+         [:h3 "Run"]
+         [:p [:span {:id "bench-run"}
+              (str (:source bench) " · K=" (:k bench)
+                   " · " (:image bench)
+                   " · boot " (or (:boot-ms bench) "?") "ms"
+                   (when (:done bench) " · done"))]]
+         [:p [:span {:id "bench-updated"} (str "updated " (:updated-ms bench))]]]
+        [:div {:class "card"}
+         [:h3 "Waves (warm execs)"]
+         [:table {:class "data"}
+          [:thead [:tr [:th "conc"] [:th "n"] [:th "oks"] [:th "warm ms"]
+                      [:th "exec/s"] [:th "per-VM/s"] [:th "avg ms"]]]
+          [:tbody
+           (for [[i w] (map-indexed vector waves)]
+             [:tr {:id (str "bench-wave-" i)}
+              [:td (:conc w)] [:td (:n w)] [:td (:oks w)]
+              [:td (:warm-ms w)]
+              [:td (fmt1 (:execs-per-sec w))]
+              [:td (fmt1 (:per-vm-per-sec w))]
+              [:td (fmt1 (:avg-latency-ms w))]])]]]]
+       [:div {:id "bench-empty" :class "card"}
+        [:p "no benchmark results yet — run the daemon-probe loadtest"]])
+   ]))
+
 (defn live-region
   "The fragment the SSE stream re-renders: chrome + every view section."
   [b]
@@ -232,6 +268,7 @@
    [vms-panel b]
    [policy-panel b]
    [egress-panel b]
+   [bench-panel b]
    [:footer [:span {:id "foot"} (str "last sample " (:heartbeat b))]]])
 
 ;; -- action fragments ---------------------------------------------------------

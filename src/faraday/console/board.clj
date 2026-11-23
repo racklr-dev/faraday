@@ -2,10 +2,11 @@
 ;; control-plane model. wrap-datastar subscribes each SSE connection to the
 ;; cells its last render dereffed, so a swap! here pushes the change to every
 ;; open tab (batched per tick).
-(ns jolt.dashboard.board
-  (:require [clojure.string :as str]
+(ns faraday.console.board
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
             [glimmer.ratom :as ratom]
-            [jolt.dashboard.runtime :as rt]))
+            [faraday.console.runtime :as rt]))
 
 (def board
   (ratom/atom {:heartbeat 0
@@ -14,7 +15,18 @@
                :pool {:warm 0 :total 0 :snapshots 0 :sandboxes []}
                :gate [] :runs [] :calls []
                :policies [] :egress [] :image "" :notice nil
-               :dry-result nil :thread-detail nil}))
+               :dry-result nil :thread-detail nil :bench nil}))
+
+(def bench-path "/tmp/jolt-bench-results.edn")
+
+(defn read-bench!
+  "Read the shared benchmark-results file written by the loadtest probe."
+  []
+  (try
+    (let [f (java.io.File. bench-path)]
+      (when (.isFile f)
+        (edn/read-string (slurp f))))
+    (catch Exception _ nil)))
 
 (defn sample!
   "Read live counters (plane stats, pool, RAP calls) into the board."
@@ -23,7 +35,8 @@
          :heartbeat (System/currentTimeMillis)
          :plane (rt/plane-stats runtime)
          :pool (assoc (rt/pool-stats runtime) :sandboxes (rt/list-sandboxes runtime))
-         :calls (rt/list-calls runtime)))
+         :calls (rt/list-calls runtime)
+         :bench (read-bench!)))
 
 (defn seed-config!
   "One-time: put the static policy/egress/image config into the board."

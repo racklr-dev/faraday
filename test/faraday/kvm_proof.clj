@@ -8,7 +8,7 @@
 (def cache "/home/jm/.cache/jolt-microvm")
 
 (let [vm (microvm/start! {:image image :cache-dir cache
-                          :project-dir "/home/jm/projects/jolt/jolt-dashboard"})]
+                          :project-dir "/home/jm/projects/jolt/faraday-console"})]
   (try
     (println "BOOTED" (pr-str (microvm/info vm)))
     (println "ALIVE?" (microvm/alive? vm))

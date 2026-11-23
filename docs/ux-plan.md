@@ -1,14 +1,14 @@
-# jolt-dashboard — Control Plane UX Plan (v1 draft for iteration)
+# faraday-console — Control Plane UX Plan (v1 draft for iteration)
 
 Grounding: the plane is one spine. Every screen is a lens on it.
 
 ```
-RAP (jolt-rap)   tool invocation ──┐
+RAP (faraday-rap)   tool invocation ──┐
                                    ▼
-runner (jolt.plane)  new-runner / run-sandbox! / run-all!
+runner (faraday.core)  new-runner / run-sandbox! / run-all!
    ├─ gate    jolt-cedar (authorize) → jolt-admission (admit under budget)
-   ├─ fanout  jolt-fanout + jolt-ledger    thread spawn/report tree
-   ├─ pool    jolt-vm-pool + jolt-microvm  warm KVM sandboxes (libkrun)
+   ├─ fanout  faraday-fanout + faraday-ledger    thread spawn/report tree
+   ├─ pool    faraday-pool + jolt-microvm  warm KVM sandboxes (libkrun)
    └─ egress  egress-id → Egress Contract (CIDRs/DNS/host-gateway)
 ```
 
@@ -21,7 +21,7 @@ The dashboard makes that flow visible (observe) and editable (control).
 
 1. **The gate is the hero.** Budget + policy + egress in one visible decision point.
 2. **Live-first, but every live thing is durable.** SSE for the now; the ledger
-   (jolt-ledger) is the audit trail. Nothing live-only that we can't scroll back.
+   (faraday-ledger) is the audit trail. Nothing live-only that we can't scroll back.
 3. **One click from stream to source.** Every row (run, invocation, thread msg)
    deep-links to the exact policy/permit/ledger record that produced it.
 4. **Power over wizards.** Cedar is the security ground truth: edit raw source,
@@ -178,7 +178,7 @@ becomes user-visible and resumable.
 
 ### 3.5 VMs — warm pool management
 
-**Purpose:** manage the KVM fleet (jolt-vm-pool): warm set, snapshots, drain.
+**Purpose:** manage the KVM fleet (faraday-pool): warm set, snapshots, drain.
 
 **Shows:**
 - Pool summary: warm / total / snapshots.
@@ -290,11 +290,11 @@ budget/weights hot-reload.
 ## 5. Read-side API additions the dashboard needs
 
 These are small, generally-useful list/stream fns to add to the libs (or a
-thin jolt.dashboard.api on top):
+thin faraday.console.api on top):
 
-- jolt-vm-pool: `list` → per-sandbox [{:id :image :state :age}] (stats is counts only).
-- jolt-ledger: `list-threads` → [{:thread-id :last-seq :last-kind :ts}] (history is per-thread only).
-- jolt-rap: `calls` → current invocations + terminal results (invoke/on-result are push-only).
+- faraday-pool: `list` → per-sandbox [{:id :image :state :age}] (stats is counts only).
+- faraday-ledger: `list-threads` → [{:thread-id :last-seq :last-kind :ts}] (history is per-thread only).
+- faraday-rap: `calls` → current invocations + terminal results (invoke/on-result are push-only).
 - runner in-flight registry: the dashboard tracks concurrent run-sandbox! futures (run-sandbox! is synchronous; no in-flight view today).
 - cedar: policy-level match info from a decision (authorized? gives decision; per-policy match, if cedar exposes it, powers "which policy matched").
 

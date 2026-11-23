@@ -8,8 +8,8 @@
         {:git/url "https://github.com/jolt-lang/ring-chez-adapter"
          :git/sha "387cf67ea7b6a8573c6ee6abca6026a45bc3b6bf"}
 
-        racklr-dev/jolt-plane
-        {:git/url "https://github.com/racklr-dev/jolt-plane"
-         :git/sha "471a74174888b548936ed6e7b8cd56c0831060f1"}}
+        racklr-dev/faraday-core
+        {:git/url "https://github.com/racklr-dev/faraday-core"
+         :git/sha "c7e8edcd86d9250827b98180bc6b9d59501fb83c"}}
 
- :aliases {:serve {:main-opts ["-m" "jolt.dashboard.main"]}}}
+ :aliases {:serve {:main-opts ["-m" "faraday.console.main"]}}}

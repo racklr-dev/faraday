@@ -1,14 +1,14 @@
 ;; Ring handler: the full page on GET /, the live fragment on the SSE request
 ;; wrap-datastar opens, the vendored Datastar client, and the action endpoints
 ;; (dry-run, cancel, run, thread) that return fragments/204 for @get actions.
-(ns jolt.dashboard.handler
+(ns faraday.console.handler
   (:require [clojure.string :as str]
             [clojure.java.io :as io]
             [jolt.datastar.core :as ds]
             [jolt.datastar.html :as h]
-            [jolt.dashboard.board :as board]
-            [jolt.dashboard.runtime :as rt]
-            [jolt.dashboard.views :as views]))
+            [faraday.console.board :as board]
+            [faraday.console.runtime :as rt]
+            [faraday.console.views :as views]))
 
 (defonce runtime (atom nil))
 (defonce datastar-js (delay (slurp (io/resource "datastar.js"))))

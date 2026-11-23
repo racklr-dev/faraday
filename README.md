@@ -1,4 +1,4 @@
-# jolt-dashboard
+# faraday-console
 
 Browser control-plane dashboard for the jolt plane, built natively on jolt.
 
@@ -6,11 +6,11 @@ Browser control-plane dashboard for the jolt plane, built natively on jolt.
   tick batching, frame dropping, component cache, id-part diffing over SSE).
 - **ring-chez-adapter** — HTTP over BSD sockets (`:strategy :fibers`), with gzip
   middleware that also compresses the SSE stream.
-- **jolt-plane** — composed in-process: the dashboard is a peer of the plane,
+- **faraday-core** — composed in-process: the dashboard is a peer of the plane,
   not a client, so the budget/policy gate stays authoritative.
 
 The design (screens, board atom, wire contract, milestones) is documented in
-[jolt-plane's dashboard plan](../jolt-plane/docs/dashboard.md).
+[faraday-core's dashboard plan](../faraday-core/docs/dashboard.md).
 
 ## Run
 
@@ -19,7 +19,7 @@ The dependency tree declares jolt 0.8.28+; the operator's release binary is at
 still 0.6.5). Cedar's native lib is required to open a plane:
 
 ```sh
-cd /home/jm/projects/jolt/jolt-dashboard
+cd /home/jm/projects/jolt/faraday-console
 sudo -u jm --preserve-env env HOME=/home/jm \
   JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt \
   JOLT_LIBKRUN_DIR=/tmp/libkrun/target/release \
