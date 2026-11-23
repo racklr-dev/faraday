@@ -33,6 +33,18 @@
 (defn- new-thread-id []
   (str "thr_" (java.util.UUID/randomUUID)))
 
+(defn warm-jdk-providers!
+  "Force jolt to install its lazy JDK class providers single-threaded, so
+  futures spawned afterwards do not race on first use. Call this before
+  running concurrent agents or sandbox streams; it touches the JDK classes
+  the fanout/ledger path uses (java.time.Instant, java.util.UUID,
+  java.io.File)."
+  []
+  (str (java.time.Instant/now))
+  (str (java.util.UUID/randomUUID))
+  (str (java.io.File. (System/getProperty "java.io.tmpdir")))
+  nil)
+
 (defn- append-entry!
   "Append an entry to the transcript, invoking the on-step hook when present."
   [ctx entry on-step]
@@ -187,6 +199,7 @@
   same rap server. specs is a vector of run! opt maps; each needs :agent, and
   :rap defaults to srv. Returns a vector of outcomes in spec order."
   [srv specs]
+  (warm-jdk-providers!)
   (let [fs (doall (map (fn [spec]
                          (future (run! (assoc spec :rap (or (:rap spec) srv))))) specs))]
     (mapv deref fs)))

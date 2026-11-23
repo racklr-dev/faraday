@@ -9,5 +9,11 @@
         racklr-dev/faraday-ledger
         {:local/root "../ledger"}
 
+        racklr-dev/faraday-memory
+        {:local/root "../memory"}
+
+        racklr-dev/faraday-fanout
+        {:local/root "../fanout"}
+
         racklr-dev/faraday-rap
         {:local/root "../rap"}}}
