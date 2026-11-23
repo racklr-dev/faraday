@@ -2,8 +2,8 @@
 
 One concrete mechanism: a content-hash-keyed cache for the jolt control
 plane. It maps the canonical content hash of a value to that value, so
-identical inputs share one stored copy. jolt-fanout uses it behind a Thread
-Message's optional `memo-key` (jolt-contracts SPEC.md §1) to skip recomputing
+identical inputs share one stored copy. faraday-fanout uses it behind a Thread
+Message's optional `memo-key` (faraday-contracts SPEC.md §1) to skip recomputing
 a spawn result.
 
 Standalone: no control-plane dependency. Keys are opaque hex strings.

@@ -3,8 +3,8 @@
   "Content-addressed result cache for the jolt control plane.
 
   A memo maps the canonical content hash of a value to that value, so
-  identical inputs produce one stored copy. jolt-fanout uses it behind a
-  Thread Message's optional memo-key (jolt-contracts SPEC.md §1) to skip
+  identical inputs produce one stored copy. faraday-fanout uses it behind a
+  Thread Message's optional memo-key (faraday-contracts SPEC.md §1) to skip
   recomputing a spawn result.
 
   Keys are opaque 64-char lowercase hex strings: the SHA-256 of the value's
@@ -134,6 +134,6 @@
 
 (defn close!
   "Flush and close the memo. Storage is write-through, so nothing is
-  buffered; kept for API symmetry with other jolt-plane stores."
+  buffered; kept for API symmetry with other faraday-core stores."
   [memo]
   nil)
