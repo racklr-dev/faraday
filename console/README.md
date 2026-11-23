@@ -1,52 +1,65 @@
-# faraday-console
+# faraday-console — the live control-plane dashboard
 
-Browser control-plane dashboard for the jolt plane, built natively on jolt.
+Browser control-plane dashboard for the faraday plane, built natively on jolt.
+It serves a live SSE board (plane stats, gate decisions, runs, calls, threads,
+sandboxes) with reactive, id-part-diffed Datastar views.
 
-- **glimmer-datastar** — the Datastar v1.0 server (reactive ratom render loop,
-  tick batching, frame dropping, component cache, id-part diffing over SSE).
-- **ring-chez-adapter** — HTTP over BSD sockets (`:strategy :fibers`), with gzip
-  middleware that also compresses the SSE stream.
-- **faraday-core** — composed in-process: the dashboard is a peer of the plane,
-  not a client, so the budget/policy gate stays authoritative.
+- [glimmer-datastar](https://github.com/jolt-lang/glimmer-datastar) — the
+  Datastar v1.0 server (reactive render loop, tick batching, frame dropping).
+- [ring-chez-adapter](https://github.com/jolt-lang/ring-chez-adapter) — HTTP
+  over BSD sockets (`:strategy :fibers`), with gzip that also compresses the
+  SSE stream.
+- [faraday-core](../core) — composed in-process: the dashboard is a peer of
+  the plane, not a client, so the budget/policy gate stays authoritative.
 
-The design (screens, board atom, wire contract, milestones) is documented in
-[faraday-core's dashboard plan](../faraday-core/docs/dashboard.md).
+## Requirements
 
-## Run
+- [jolt](https://github.com/jolt-lang/jolt) 0.8.28+
+- A built Cedar native library (`JOLT_CEDAR_LIB`) to open a plane
+- The faraday-pool requirements (libkrun + a writable `/dev/kvm`) for real
+  sandbox runs
 
-The dependency tree declares jolt 0.8.28+; the operator's release binary is at
-`/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt` (the `~/.local/bin/jolt` build is
-still 0.6.5). Cedar's native lib is required to open a plane:
+## Build
+
+Nothing to compile. Run it:
 
 ```sh
-cd /home/jm/projects/jolt/faraday-console
-sudo -u jm --preserve-env env HOME=/home/jm \
-  JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt \
-  JOLT_LIBKRUN_DIR=/tmp/libkrun/target/release \
-  JOLT_CEDAR_LIB=/home/jm/projects/jolt/jolt-cedar/native/target/release/libcedar_policy.so \
-  PATH=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux:$PATH \
-  /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt -M:serve
-# http://127.0.0.1:8787
+jolt -M:serve     # from the repo root; then http://127.0.0.1:8787
 ```
 
-In a fresh login shell (after `sudo usermod -aG kvm jm`) the `sudo -u jm
---preserve-env` wrapper is unnecessary — plain `jolt -M:serve` suffices.
+## Usage
 
 The default config opens an identity-scoped plane (alice/bob permitted, others
 denied by default; an egress forbid drops anything touching 8.8.8.8/32) and
 drives a rotating demo through the real RAP run-hook, so every view has live
-data.
+data. The seven views (Overview, Runs, Agents, Threads, VMs, Policy, Egress)
+switch client-side on a `$view` signal.
+
+## API
+
+| Entry point | Args | Role |
+|---|---|---|
+| `handler` | `req` | the ring handler (Datastar SSE + HTML) |
+| `open-runtime!` | `opts` | compose plane + pool + rap + ledger/fanout in-process |
+| `start-demo!` | `runtime interval-ms` | drive the rotating demo |
+| `-main` | `& args` | serve on `127.0.0.1:8787` |
 
 ## Status
 
-M1 — full control-plane MVP. Seven views (Overview, Runs, Agents, Threads,
-VMs, Policy, Egress) switched client-side by a `$view` signal; a live SSE
-board (plane stats, gate decisions, runs, calls, threads, sandboxes); a Cedar
-dry-run simulator (identity + egress); and the actions cancel, ad-hoc run, and
-thread drill-in. The full plane stack (cedar + admission + vm-pool + fanout +
-ledger + rap) runs in-process, and the sandbox boundary is REAL: every
-admitted run boots (or reuses a warm) KVM microVM — alpine:3.20 via
-jolt-microvm + libkrun 2.0 — and executes argv in-guest over SSH, surfacing
-the guest's exit code and stdout. Egress contracts are enforced by the Cedar
-gate; guest network itself is default-deny (libkrun ships no route), with
-nftables allow-listing still on the v1.1 backlog. See docs/ux-plan.md.
+beta — the full plane stack (cedar + admission + vm-pool + fanout + ledger +
+rap) runs in-process, and the sandbox boundary is real: every admitted run
+boots or reuses a KVM microVM and executes argv in-guest, surfacing the
+guest's exit code and stdout. Egress is enforced by the Cedar gate; guest
+network itself is default-deny, and per-CIDR nftables allow-listing is not yet
+wired.
+
+## License
+
+EPL-2.0
+
+## Learn more
+
+- [jolt-lang](https://github.com/jolt-lang/jolt) — the language and toolchain
+- [glimmer-datastar](https://github.com/jolt-lang/glimmer-datastar) — the Datastar server
+- [ring-chez-adapter](https://github.com/jolt-lang/ring-chez-adapter) — the HTTP/SSE adapter
+- [faraday-core](../core) — the plane this dashboard peers with
