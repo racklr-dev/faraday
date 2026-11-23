@@ -6,7 +6,7 @@
 
         racklr-dev/jolt-cedar
         {:git/url "https://github.com/racklr-dev/jolt-cedar"
-         :git/sha "2eaafe111343d3457597a144779dba9ed5eaccae"}
+         :git/sha "bf7ec485b4613ce583816160779a44231b605afe"}
 
         racklr-dev/faraday-pool
         {:local/root "../pool"}
