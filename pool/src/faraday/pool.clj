@@ -21,7 +21,8 @@
   :max-warm live VMs. To run a request's argv, callers execute against the
   handle's live VM: (jolt.microvm/exec (:vm handle) ...)."
   (:require [jolt.microvm :as microvm]
-            [clojure.java.shell :as shell])
+            [clojure.java.shell :as shell]
+            [faraday.contracts :as contracts])
   (:import [java.io File]))
 
 (defrecord Pool [opts state lock])
@@ -164,13 +165,19 @@
         hook (:admission-hook opts)]
     (when-not (map? request)
       (fail! "request must be a map" {:request request}))
-    (when (and hook (not (hook request)))
-      (fail! "admission denied" {:type :admission-denied :request-id (:request-id request)}))
-    (let [boot-opts (request->boot-opts pool request)
+    (let [request (contracts/decode! :sandbox-request
+                     (merge request
+                            (when-not (contains? request :v) {:v 1})
+                            (when-not (contains? request :request-id)
+                              {:request-id (str "req_" (java.util.UUID/randomUUID))})
+                            (when-not (contains? request :image) {:image (:image opts)})))
+          boot-opts (request->boot-opts pool request)
           image (:image boot-opts)
           state (:state pool)
           lock (:lock pool)
           max-warm (:max-warm opts)]
+      (when (and hook (not (hook request)))
+        (fail! "admission denied" {:type :admission-denied :request-id (:request-id request)}))
       (loop []
         (let [reservation
               (locking lock

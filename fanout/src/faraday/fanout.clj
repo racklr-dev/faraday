@@ -11,7 +11,8 @@
   faraday-ledger, with an optional cedar policy hook that can veto an emit
   before it is appended. Emitted messages carry the standard kinds: spawn,
   inherit, report, yield, user-input, system."
-  (:require [faraday.ledger :as ledger]))
+  (:require [faraday.ledger :as ledger]
+            [faraday.contracts :as contracts]))
 
 ;; An opaque runtime handle: the ledger it writes into, plus the optional
 ;; memo handle and policy hook. The memo is held for the executor side of a
@@ -62,15 +63,17 @@
 
 (defn emit
   "Append an already-shaped Thread Message map to the ledger (after the policy
-  hook, if any, permits it). Returns the appended message map."
+  hook, if any, permits it). The message is validated against the declared
+  Thread Message contract. Returns the appended message map."
   [rt msg]
   (when-not (map? msg)
     (fail! "message must be a map" {:msg msg}))
-  (when-let [hook (:policy-hook rt)]
-    (when-not (hook msg)
-      (fail! "policy vetoed emit" {:type :policy-vetoed :msg msg})))
-  (let [{seq' :seq} (ledger/append! (:ledger rt) msg)]
-    (assoc msg :seq seq')))
+  (let [msg (contracts/decode! :thread-message msg)]
+    (when-let [hook (:policy-hook rt)]
+      (when-not (hook msg)
+        (fail! "policy vetoed emit" {:type :policy-vetoed :msg msg})))
+    (let [{seq' :seq} (ledger/append! (:ledger rt) msg)]
+      (assoc msg :seq seq'))))
 
 (defn spawn
   "Emit a spawn Thread Message for spec (a Sandbox Request or tool spec) under

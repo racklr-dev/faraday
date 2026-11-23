@@ -1,4 +1,7 @@
 {:paths ["src"]
 
- :deps {racklr-dev/faraday-ledger
+ :deps {racklr-dev/faraday-contracts
+        {:local/root "../contracts"}
+
+        racklr-dev/faraday-ledger
         {:local/root "../ledger"}}}

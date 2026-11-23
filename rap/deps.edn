@@ -1,6 +1,9 @@
 {:paths ["src"]
 
- :deps {racklr-dev/faraday-fanout
+ :deps {racklr-dev/faraday-contracts
+        {:local/root "../contracts"}
+
+        racklr-dev/faraday-fanout
         {:local/root "../fanout"}
 
         racklr-dev/faraday-pool

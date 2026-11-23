@@ -1,6 +1,9 @@
 {:paths ["src"]
 
- :deps {racklr-dev/jolt-microvm
+ :deps {racklr-dev/faraday-contracts
+        {:local/root "../contracts"}
+
+        racklr-dev/jolt-microvm
         {:git/url "https://github.com/racklr-dev/jolt-microvm"
          :git/sha "80a384134ea7cdbd620527bf0fb4112bd1b9f57b"}
 

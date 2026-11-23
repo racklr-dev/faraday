@@ -1,0 +1,8 @@
+{
+  "v": 1,
+  "call-id": "call_01J8VK2Q",
+  "status": "ok",
+  "segments": [ { "type": "text", "content": "total 4" } ],
+  "exit-code": 0,
+  "error": null
+}

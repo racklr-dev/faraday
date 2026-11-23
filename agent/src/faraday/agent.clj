@@ -22,7 +22,8 @@
   result to the transcript, and loops. A tool-call whose invoke throws (bad
   args, policy veto) becomes an error tool-result so the agent can recover."
   (:refer-clojure :exclude [run!])
-  (:require [faraday.rap :as rap]))
+  (:require [faraday.rap :as rap]
+            [faraday.contracts :as contracts]))
 
 ;; -- helpers -----------------------------------------------------------------
 
@@ -78,10 +79,11 @@
            (when (:timeout r) {:error {:message "timed out waiting for terminal"
                                        :code "timeout"}})
            (when (map? frame)
-             {:exit-code (:exit-code frame)
-              :segments (:segments frame)
-              :error (:error frame)
-              :frame frame}))))
+             (let [res (contracts/decode! :tool-result frame)]
+               {:exit-code (:exit-code res)
+                :segments (:segments res)
+                :error (:error res)
+                :frame frame})))))
 
 ;; -- scripted agent ----------------------------------------------------------
 

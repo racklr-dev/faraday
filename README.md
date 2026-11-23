@@ -15,7 +15,7 @@ pinned git dependencies.
 
 | dir | library | role |
 |---|---|---|
-| `contracts/` | faraday-contracts | the wire spec: messages, requests, invocations, permits, policies, egress |
+| `contracts/` | faraday-contracts | the declared wire contracts: one definition per shape, derived decode/encode/schema |
 | `core/` | faraday.core | the plane: budget admission + Cedar authorization + sandbox runs |
 | `pool/` | faraday.pool | warm VM pool over jolt-microvm + jolt-oci |
 | `rap/` | faraday.rap | tool invocation server (requests → runs) |

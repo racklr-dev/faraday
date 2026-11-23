@@ -16,6 +16,7 @@
   (:require [faraday.pool :as pool]
             [jolt.microvm :as microvm]
             [faraday.fanout :as fanout]
+            [faraday.contracts :as contracts]
             [clojure.string :as str]))
 
 (defrecord Server [vm-pool fanout policy-hook run-hook state])
@@ -190,19 +191,18 @@
   [srv call]
   (when-not (map? call)
     (fail! "call must be a map" {:call call}))
-  (non-empty-string! (:thread-id call) :thread-id)
-  (non-empty-string! (:name call) :name)
-  (let [args (:args call)]
-    (when-not (map? args)
-      (fail! "call requires an :args map" {:call call}))
-    (when-not (and (vector? (:argv args)) (seq (:argv args)))
-      (fail! "call args require a non-empty :argv vector" {:call call})))
-  (when-let [hook (:policy-hook srv)]
-    (when-not (hook call)
-      (fail! "policy vetoed invocation" {:type :policy-vetoed :call call})))
   (let [call-id (or (:call-id call) (str "call_" (java.util.UUID/randomUUID)))
-        call (assoc call :call-id call-id)
-        state (:state srv)]
+        call (contracts/decode! :tool-invocation
+                                (merge call
+                                       (when-not (contains? call :v) {:v 1})
+                                       (when-not (contains? call :call-id) {:call-id call-id})))
+        args (:args call)]
+    (when-not (and (vector? (:argv args)) (seq (:argv args)))
+      (fail! "call args require a non-empty :argv vector" {:call call}))
+    (when-let [hook (:policy-hook srv)]
+      (when-not (hook call)
+        (fail! "policy vetoed invocation" {:type :policy-vetoed :call call})))
+    (let [state (:state srv)]
     (swap! state (fn [s]
                    (let [pending (get-in s [:pending call-id])]
                      (-> s
@@ -213,7 +213,7 @@
                                     :result-cbs (or (:result-cbs pending) {})
                                     :terminal nil :cancelled? false})))))
     (future (run-invocation! srv call-id))
-    call-id))
+    call-id)))
 
 (defn cancel
   "Cancel the invocation with call-id, emitting its terminal cancelled result."

@@ -1,23 +1,35 @@
-# faraday-contracts — canonical data contracts for the jolt control plane
+# faraday-contracts — the narrow waist
 
-The canonical wire spec for the jolt control plane: it holds `SPEC.md` (the
-single pin for every data shape that crosses a component boundary) and
-`examples/` (canonical JSON test vectors). Integrators implement the shapes in
-any language; every faraday and jolt-* library tests against these fixtures so
-the boundaries stay compatible.
+The canonical data contracts for the jolt control plane. `SPEC.md` is the
+single pin for every data shape that crosses a component boundary; the
+`faraday.contracts` namespace is its executable form: each shape is declared
+once with `define-contract`, and the decoder, encoder and JSON-Schema
+projection are derived from that declaration, never restated.
 
-This is a spec, not a library — there is no code to build or import.
+Wire encoding is JSON; `"v": 1` on every envelope; unknown keys are ignored,
+missing required keys are rejected; timestamps are RFC 3339 UTC; ids are
+opaque strings. `examples/` holds the canonical test vectors every library
+consumes.
 
-## Requirements
+## The library
 
-- None. The spec is plain markdown and JSON; read it with any editor.
+```clojure
+(require '[faraday.contracts :as c])
 
-## Usage
+(c/decode  :tool-invocation obj) ; JSON object or keyword map -> validated map
+(c/encode  :tool-invocation rec) ; validated map -> string-keyed wire object
+(c/decode! :sandbox-request obj) ; throw on refusal
+(c/schema  :sandbox-request)     ; JSON-Schema projection
+(c/valid?  :egress-contract obj) ; boolean
+```
 
-Read `SPEC.md` for the field tables, invariants, and change rules; consume
-`examples/` as canonical test vectors.
+`decode` returns a refusal map (never throws) naming the first member that
+failed; `decode!`/`encode!` throw. decode reads both string-keyed JSON and
+in-process keyword maps, so a producer in this image builds the payload the
+consumer decodes through the same declaration and the two ends of one boundary
+cannot drift.
 
-## The contracts
+## Contracts
 
 | contract | produced by | consumed by | MVP? |
 |---|---|---|---|
@@ -28,21 +40,15 @@ Read `SPEC.md` for the field tables, invariants, and change rules; consume
 | 5. Budget Permit | jolt-admission | faraday-pool, faraday-fanout | deferred |
 | 6. Policy Set | operator/config | jolt-cedar | deferred |
 
-Wire encoding is JSON; `"v": 1` on every envelope; unknown keys are ignored,
-missing required keys are rejected. Deferred contracts are pinned now and
-implemented by jolt-admission / jolt-cedar, but not on the MVP critical path.
+Deferred contracts are pinned now so the MVP libraries can accept them as
+hooks later; nothing in the MVP path is blocked on them.
 
-## Status
+## Run
 
-stable — the spec is version 1.0 and the canonical examples are the test
-vectors every library consumes.
+```
+cd contracts && jolt run test/faraday/contracts_test.clj
+```
 
 ## License
 
-EPL-2.0
-
-## Learn more
-
-- [jolt-lang](https://github.com/jolt-lang/jolt) — the language and toolchain
-- [faraday-core](../core) — the plane that implements the gate over contracts 5 and 6
-- [faraday-rap](../rap) — the tool-invocation server (contract 3)
+Eclipse Public License - v 2.0
