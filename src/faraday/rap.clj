@@ -1,5 +1,5 @@
 ;; faraday-rap: RAP tool server + MCP adapter.
-;; A server runs Tool Invocations (jolt-contracts SPEC.md §3) against a
+;; A server runs Tool Invocations (faraday-contracts SPEC.md §3) against a
 ;; faraday-pool, streams result frames to subscribers, and adapts them to MCP.
 ;; Each invocation has exactly one terminal result, keyed by call-id. invoke
 ;; runs asynchronously (a future), so cancel/close can short-circuit a call
@@ -9,7 +9,7 @@
 (ns faraday.rap
   "RAP tool server and MCP adapter for the jolt control plane.
 
-  Runs Tool Invocations (jolt-contracts SPEC.md §3) against a faraday-pool,
+  Runs Tool Invocations (faraday-contracts SPEC.md §3) against a faraday-pool,
   streams results to subscribers, and adapts them to MCP. Each invocation has
   exactly one terminal result, keyed by call-id."
   (:refer-clojure :exclude [close])
