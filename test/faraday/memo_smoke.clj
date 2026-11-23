@@ -1,9 +1,9 @@
-;; jolt-memo smoke: minimal critical-path gate for CI.
+;; faraday-memo smoke: minimal critical-path gate for CI.
 ;; Topic (board nc-40AE): cache hit/miss round-trip survives the durable boundary.
 ;; Fail-fast: the first mismatch prints and exits 1.
-;; Run: cd jolt-memo && jolt run test/jolt/memo_smoke.clj
+;; Run: cd faraday-memo && jolt run test/jolt/memo_smoke.clj
 (ns jolt.smoke.memo
-  (:require [jolt.memo :as memo]))
+  (:require [faraday.memo :as memo]))
 
 (defn check [label expected got]
   (if (= expected got)
@@ -15,7 +15,7 @@
 
 (defn tmp-dir []
   (str (System/getProperty "java.io.tmpdir")
-       "/jolt-memo-smoke-" (System/nanoTime)))
+       "/faraday-memo-smoke-" (System/nanoTime)))
 
 (let [dir (tmp-dir)]
   ;; -- phase 1: fresh memo, put + hit + miss -------------------------------

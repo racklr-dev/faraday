@@ -1,5 +1,5 @@
-;; jolt-memo: content-addressed result cache.
-(ns jolt.memo
+;; faraday-memo: content-addressed result cache.
+(ns faraday.memo
   "Content-addressed result cache for the jolt control plane.
 
   A memo maps the canonical content hash of a value to that value, so
@@ -18,7 +18,7 @@
   (:refer-clojure :exclude [get contains?])
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [jolt.memo.sha256 :as sha]))
+            [faraday.memo.sha256 :as sha]))
 
 (defn- join
   "Concatenate xs, inserting sep between adjacent elements."

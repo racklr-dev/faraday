@@ -1,6 +1,6 @@
-;; jolt-memo: minimal bit primitive for the vendored SHA-256.
+;; faraday-memo: minimal bit primitive for the vendored SHA-256.
 ;; Vendored from racklr-dev/jolt-merkle (jolt.bit, rotate-right32) @ 06e135f.
-(ns jolt.memo.bit
+(ns faraday.memo.bit
   "Minimal bit primitive for the vendored SHA-256.  jolt bit ops operate on
   64-bit Longs; rotate-right32 is the only operation the compression needs.")
 

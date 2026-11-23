@@ -1,8 +1,8 @@
-;; jolt-memo test: real behavior of the content-addressed cache.
-;; Run: cd jolt-memo && jolt run test/jolt/memo_test.clj
+;; faraday-memo test: real behavior of the content-addressed cache.
+;; Run: cd faraday-memo && jolt run test/jolt/memo_test.clj
 (ns jolt.test.memo
-  (:require [jolt.memo :as memo]
-            [jolt.memo.sha256 :as sha]
+  (:require [faraday.memo :as memo]
+            [faraday.memo.sha256 :as sha]
             [clojure.java.io :as io]))
 
 (def failures (atom 0))
@@ -18,7 +18,7 @@
 (defn check-true [label x] (check label true (boolean x)))
 (defn check-false [label x] (check label false (boolean x)))
 
-(let [dir (str "/tmp/jolt-memo-test-" (System/nanoTime))
+(let [dir (str "/tmp/faraday-memo-test-" (System/nanoTime))
       m (memo/new-memo {:path dir})]
 
   ;; the vendored SHA-256 must match the FIPS 180-4 vectors

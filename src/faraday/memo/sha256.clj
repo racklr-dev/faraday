@@ -1,7 +1,7 @@
 ;; Pure-Clojure SHA-256, needed because jolt provides no MessageDigest.
 ;; Vendored verbatim from racklr-dev/jolt-merkle (jolt.sha256) @ 06e135f;
 ;; only the namespace and its :require were renamed.
-(ns jolt.memo.sha256
+(ns faraday.memo.sha256
   "Pure-Clojure SHA-256 (FIPS 180-4 / SHS).
 
   jolt's runtime has no java.security.MessageDigest provider, so we
@@ -11,7 +11,7 @@
     (digest bytes)     -> 32-byte byte array
     (hex bytes)        -> lowercase hex string
     (hex-digest bytes) -> lowercase hex of the digest"
-  (:require [jolt.memo.bit :as bit]))
+  (:require [faraday.memo.bit :as bit]))
 
 (def ^:private h0
   [0x6a09e667 0xbb67ae85 0x3c6ef372 0xa54ff53a

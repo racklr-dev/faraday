@@ -1,4 +1,4 @@
-# jolt-memo — content-addressed result cache
+# faraday-memo — content-addressed result cache
 
 One concrete mechanism: a content-hash-keyed cache for the jolt control
 plane. It maps the canonical content hash of a value to that value, so
@@ -12,13 +12,13 @@ Standalone: no control-plane dependency. Keys are opaque hex strings.
 
 ```clojure
 ;; deps.edn
-{:deps {racklr-dev/jolt-memo
-        {:git/url "https://github.com/racklr-dev/jolt-memo"
+{:deps {racklr-dev/faraday-memo
+        {:git/url "https://github.com/racklr-dev/faraday-memo"
          :git/sha "<pinned sha>"}}}
 ```
 
 ```clojure
-(require '[jolt.memo :as memo])
+(require '[faraday.memo :as memo])
 
 (def cache (memo/new-memo {:path "/var/lib/jolt/memo"}))
 (def k (memo/put! cache {:status "ok" :result 42}))
@@ -37,7 +37,7 @@ and set order insensitive, vector order sensitive), put!/get/contains?/
 delete!/stats round-trips, and idempotent re-put.
 
 No runtime deps (`{:paths ["src"]}`). The SHA-256 lives in the private
-namespaces `jolt.memo.sha256` and `jolt.memo.bit`, so a memo keeps a
+namespaces `faraday.memo.sha256` and `faraday.memo.bit`, so a memo keeps a
 zero-dependency graph.
 
 ## License
