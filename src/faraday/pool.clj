@@ -1,4 +1,4 @@
-;; jolt-vm-pool: warm VM pool + snapshot hibernate.
+;; faraday-pool: warm VM pool + snapshot hibernate.
 ;; A pool keeps a bounded set of microVMs (jolt-microvm) keyed by image:
 ;; acquire reuses the most recently released warm VM for the image, boots one
 ;; while the live count is under :max-warm, and blocks until a release when
@@ -6,7 +6,7 @@
 ;; :max-warm; hibernate/restore suspend and resume via snapshots. The Sandbox
 ;; Request is jolt-contracts SPEC.md §2; the pool owns VM lifecycle only:
 ;; running the request argv is the caller's job via (jolt.microvm/exec ...).
-(ns jolt.vm-pool
+(ns faraday.pool
   "Warm VM pool and snapshot hibernate for the jolt control plane.
 
   The pool hands out warm microVMs (jolt-microvm) from jolt-oci images,
@@ -33,7 +33,7 @@
 ;; -- validation + ids --------------------------------------------------------
 
 (defn- fail! [msg data]
-  (throw (ex-info msg (assoc data :jolt.vm-pool/error true))))
+  (throw (ex-info msg (assoc data :faraday.pool/error true))))
 
 (defn- non-empty-string! [v field]
   (when-not (and (string? v) (seq v))

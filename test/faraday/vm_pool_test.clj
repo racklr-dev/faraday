@@ -1,8 +1,8 @@
-;; jolt-vm-pool unit test: pool lifecycle + LRU + hibernate/restore, using
+;; faraday-pool unit test: pool lifecycle + LRU + hibernate/restore, using
 ;; in-memory fakes for jolt.microvm so it runs with no KVM/libkrun.
-;; Run: cd jolt-vm-pool && jolt run test/jolt/vm_pool_test.clj
+;; Run: cd faraday-pool && jolt run test/jolt/vm_pool_test.clj
 (ns jolt.test.vm-pool
-  (:require [jolt.vm-pool :as pool]
+  (:require [faraday.pool :as pool]
             [jolt.microvm :as microvm]))
 
 (defn check [label expected got]
@@ -59,7 +59,7 @@
      ~@body))
 
 (defn new-test-pool [& [overrides]]
-  (let [dir (str (System/getProperty "java.io.tmpdir") "/jolt-vm-pool-test-" (System/nanoTime))]
+  (let [dir (str (System/getProperty "java.io.tmpdir") "/faraday-pool-test-" (System/nanoTime))]
     (pool/new-pool (merge {:image "img-a" :cache-dir dir} overrides))))
 
 (defn req [& [overrides]]

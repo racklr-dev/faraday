@@ -1,10 +1,10 @@
-;; jolt-vm-pool integration test (board nc-56AD): warm reuse + snapshot/restore
+;; faraday-pool integration test (board nc-56AD): warm reuse + snapshot/restore
 ;; over a REAL KVM microVM (alpine:3.20 via jolt-microvm/jolt-oci).
 ;; Requires /dev/kvm access (jm in the kvm group). NEVER `sg kvm`: it makes
 ;; kvm the primary gid and libkrun virtio-fs guest writes fail EPERM. Run:
-;;   cd jolt-vm-pool && sudo -u jm --preserve-env env JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt PATH=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux:$PATH /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/vm_pool_integration.clj
+;;   cd faraday-pool && sudo -u jm --preserve-env env JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt PATH=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux:$PATH /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/vm_pool_integration.clj
 (ns jolt.integration.vm-pool
-  (:require [jolt.vm-pool :as pool]
+  (:require [faraday.pool :as pool]
             [jolt.microvm :as microvm]
             [clojure.string :as str]))
 

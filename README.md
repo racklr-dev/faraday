@@ -1,4 +1,4 @@
-# jolt-vm-pool — warm VM pool + snapshot hibernate
+# faraday-pool — warm VM pool + snapshot hibernate
 
 One concrete mechanism: a warm pool of microVMs for the jolt control plane.
 It hands out sandboxes from `jolt-microvm` images resolved by `jolt-oci`,
@@ -11,13 +11,13 @@ Permit seam, SPEC.md §5).
 
 ```clojure
 ;; deps.edn
-{:deps {racklr-dev/jolt-vm-pool
-        {:git/url "https://github.com/racklr-dev/jolt-vm-pool"
+{:deps {racklr-dev/faraday-pool
+        {:git/url "https://github.com/racklr-dev/faraday-pool"
          :git/sha "<pinned sha>"}}}
 ```
 
 ```clojure
-(require '[jolt.vm-pool :as pool])
+(require '[faraday.pool :as pool])
 
 (def p (pool/new-pool {:image "oci://ghcr.io/jolt-lang/distroless-base@sha256:..."
                        :cache-dir "/var/lib/jolt/vm-pool"
@@ -50,11 +50,11 @@ liveness probe on reuse.
 
 Unit test (no KVM, fakes jolt-microvm via with-redefs):
 
-    cd jolt-vm-pool && JOLT_SKIP_MIN_VERSION=1 JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/vm_pool_test.clj
+    cd faraday-pool && JOLT_SKIP_MIN_VERSION=1 JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/vm_pool_test.clj
 
 Integration test (real KVM, boots alpine:3.20):
 
-    cd jolt-vm-pool && sudo -u jm --preserve-env env JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt PATH=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux:$PATH /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/vm_pool_integration.clj
+    cd faraday-pool && sudo -u jm --preserve-env env JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt PATH=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux:$PATH /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/vm_pool_integration.clj
 
 Prerequisites: /dev/kvm writable (jm in the kvm group) and a jolt binary at
 JOLT_BIN that satisfies jolt-microvm's 0.8.28 floor. Never run under `sg kvm`:
