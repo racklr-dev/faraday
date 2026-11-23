@@ -1,8 +1,8 @@
-;; jolt-fanout unit test: emit Thread Messages into a real jolt-ledger.
-;; Run: cd jolt-fanout && jolt run test/jolt/fanout_test.clj
+;; faraday-fanout unit test: emit Thread Messages into a real faraday-ledger.
+;; Run: cd faraday-fanout && jolt run test/jolt/fanout_test.clj
 (ns jolt.test.fanout
-  (:require [jolt.fanout :as fanout]
-            [jolt.ledger :as ledger]))
+  (:require [faraday.fanout :as fanout]
+            [faraday.ledger :as ledger]))
 
 (defn check [label expected got]
   (if (= expected got)
@@ -21,7 +21,7 @@
     (if (= ::no-throw e) ::no-throw (get (ex-data e) :type))))
 
 (defn tmp-dir []
-  (str (System/getProperty "java.io.tmpdir") "/jolt-fanout-test-" (System/nanoTime)))
+  (str (System/getProperty "java.io.tmpdir") "/faraday-fanout-test-" (System/nanoTime)))
 
 (defn new-test-ledger []
   (ledger/new-ledger {:path (str (tmp-dir) "/ledger.db")}))

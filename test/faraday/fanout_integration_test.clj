@@ -1,11 +1,11 @@
-;; jolt-fanout integration test (board nc-6F47): build a fanout tree in a real
-;; jolt-ledger, cross the durable boundary (close + reopen), read every thread
+;; faraday-fanout integration test (board nc-6F47): build a fanout tree in a real
+;; faraday-ledger, cross the durable boundary (close + reopen), read every thread
 ;; back, reconstruct the parent->children edges, and verify the tree + payloads
 ;; round-tripped.
-;; Run: cd jolt-fanout && jolt run test/jolt/fanout_integration_test.clj
+;; Run: cd faraday-fanout && jolt run test/jolt/fanout_integration_test.clj
 (ns jolt.integration.fanout
-  (:require [jolt.fanout :as fanout]
-            [jolt.ledger :as ledger]))
+  (:require [faraday.fanout :as fanout]
+            [faraday.ledger :as ledger]))
 
 (defn check [label expected got]
   (if (= expected got)
@@ -17,7 +17,7 @@
 
 (defn tmp-dir []
   (str (System/getProperty "java.io.tmpdir")
-       "/jolt-fanout-integration-" (System/nanoTime)))
+       "/faraday-fanout-integration-" (System/nanoTime)))
 
 (def specs
   {:root {:v 1 :request-id "req-root" :image "img/root" :argv ["/bin/root"]}

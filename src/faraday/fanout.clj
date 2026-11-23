@@ -1,17 +1,17 @@
-;; jolt-fanout: task fanout runtime.
+;; faraday-fanout: task fanout runtime.
 ;; A runtime shapes Thread Messages (jolt-contracts SPEC.md §1) and appends
-;; them to a jolt-ledger, with an optional policy hook that can veto an emit
+;; them to a faraday-ledger, with an optional policy hook that can veto an emit
 ;; before it is appended. spawn/inherit mint a NEW thread (new thread-id) whose
 ;; parent-id links it into the tree; report/yield append into an existing
 ;; thread-id. The runtime never closes the ledger/memo it was given.
-(ns jolt.fanout
+(ns faraday.fanout
   "Task fanout runtime for the jolt control plane.
 
   A runtime emits Thread Messages (jolt-contracts SPEC.md §1) into a
-  jolt-ledger, with an optional cedar policy hook that can veto an emit
+  faraday-ledger, with an optional cedar policy hook that can veto an emit
   before it is appended. Emitted messages carry the standard kinds: spawn,
   inherit, report, yield, user-input, system."
-  (:require [jolt.ledger :as ledger]))
+  (:require [faraday.ledger :as ledger]))
 
 ;; An opaque runtime handle: the ledger it writes into, plus the optional
 ;; memo handle and policy hook. The memo is held for the executor side of a
@@ -21,7 +21,7 @@
 ;; -- helpers -----------------------------------------------------------------
 
 (defn- fail! [msg data]
-  (throw (ex-info msg (assoc data :jolt.fanout/error true))))
+  (throw (ex-info msg (assoc data :faraday.fanout/error true))))
 
 (defn- non-empty-string! [v field]
   (when-not (and (string? v) (seq v))
@@ -51,7 +51,7 @@
 ;; -- public API --------------------------------------------------------------
 
 (defn new-runtime
-  "Open a fanout runtime over opts, a map with :ledger (jolt-ledger handle)
+  "Open a fanout runtime over opts, a map with :ledger (faraday-ledger handle)
   and optionally :memo (jolt-memo handle) and :policy-hook (fn msg -> truthy
   to permit, nil = always permit). Returns an opaque runtime handle."
   [opts]
