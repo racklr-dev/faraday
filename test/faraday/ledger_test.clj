@@ -1,8 +1,8 @@
-;; jolt-ledger real test: seq assignment, msg-id dedup, history order,
+;; faraday-ledger real test: seq assignment, msg-id dedup, history order,
 ;; processed?/last-seq, cross-thread independence, and persistence.
-;; Run: cd jolt-ledger && jolt run test/jolt/ledger_test.clj
+;; Run: cd faraday-ledger && jolt run test/jolt/ledger_test.clj
 (ns jolt.test.ledger
-  (:require [jolt.ledger :as ledger]))
+  (:require [faraday.ledger :as ledger]))
 
 (def failures (atom 0))
 
@@ -27,7 +27,7 @@
          overrides))
 
 (defn with-ledger [f]
-  (let [path (str "/tmp/jolt-ledger-test-" (System/nanoTime) "/ledger.db")
+  (let [path (str "/tmp/faraday-ledger-test-" (System/nanoTime) "/ledger.db")
         db (ledger/new-ledger {:path path})]
     (try
       (f db path)
@@ -159,7 +159,7 @@
 
 ;; --- new-ledger parent dir creation -------------------------------------------
 
-(let [db (ledger/new-ledger {:path "/tmp/jolt-ledger-test-deep/a/b/ledger.db"})]
+(let [db (ledger/new-ledger {:path "/tmp/faraday-ledger-test-deep/a/b/ledger.db"})]
   (check "new-ledger creates parent dirs" true (fn? ledger/append!))
   (ledger/close! db))
 

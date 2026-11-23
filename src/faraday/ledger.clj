@@ -1,10 +1,10 @@
-;; jolt-ledger: durable idempotent thread state + processed-ID dedup.
+;; faraday-ledger: durable idempotent thread state + processed-ID dedup.
 ;; Storage is sqlite via jolt-lang/db (db.sqlite), one connection per ledger.
 ;; The ledger is the single writer for Thread Messages (jolt-contracts SPEC.md
 ;; §1): it assigns each message a per-thread monotonic :seq, dedups on :msg-id,
 ;; and answers history/processed queries. The durable body of each message is
 ;; the canonical wire JSON (string keys), read back as keyword-keyed maps.
-(ns jolt.ledger
+(ns faraday.ledger
   "Durable, idempotent thread state for the jolt control plane.
 
   The ledger is the single writer for Thread Messages (jolt-contracts
@@ -19,7 +19,7 @@
   #{"spawn" "inherit" "report" "yield" "user-input" "system"})
 
 (defn- fail! [msg data]
-  (throw (ex-info msg (assoc data :jolt.ledger/error true))))
+  (throw (ex-info msg (assoc data :faraday.ledger/error true))))
 
 (defn- non-empty-string! [v field]
   (when-not (and (string? v) (seq v))

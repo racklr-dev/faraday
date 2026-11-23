@@ -1,9 +1,9 @@
-;; jolt-ledger smoke: minimal critical-path gate for CI.
+;; faraday-ledger smoke: minimal critical-path gate for CI.
 ;; Topic (board nc-71FC): idempotent redelivery survives the durable boundary.
 ;; Fail-fast: the first mismatch prints and exits 1.
-;; Run: cd jolt-ledger && jolt run test/jolt/ledger_smoke.clj
+;; Run: cd faraday-ledger && jolt run test/jolt/ledger_smoke.clj
 (ns jolt.smoke.ledger
-  (:require [jolt.ledger :as ledger]))
+  (:require [faraday.ledger :as ledger]))
 
 (defn check [label expected got]
   (if (= expected got)
@@ -15,7 +15,7 @@
 
 (defn tmp-path []
   (str (System/getProperty "java.io.tmpdir")
-       "/jolt-ledger-smoke-" (System/nanoTime) "/ledger.db"))
+       "/faraday-ledger-smoke-" (System/nanoTime) "/ledger.db"))
 
 (defn msg [thread-id msg-id & {:as overrides}]
   (merge {:v 1

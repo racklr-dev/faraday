@@ -1,4 +1,4 @@
-# jolt-ledger — durable idempotent thread state
+# faraday-ledger — durable idempotent thread state
 
 One concrete mechanism: the single writer for Thread Messages in the jolt
 control plane. It assigns each message a per-thread monotonic `seq`, dedups on
@@ -13,13 +13,13 @@ Standalone: nothing else in the control plane is required. It implements
 
 ```clojure
 ;; deps.edn
-{:deps {racklr-dev/jolt-ledger
-        {:git/url "https://github.com/racklr-dev/jolt-ledger"
+{:deps {racklr-dev/faraday-ledger
+        {:git/url "https://github.com/racklr-dev/faraday-ledger"
          :git/sha "<pinned sha>"}}}
 ```
 
 ```clojure
-(require '[jolt.ledger :as ledger])
+(require '[faraday.ledger :as ledger])
 
 (def db (ledger/new-ledger {:path "/var/lib/jolt/ledger"}))
 (ledger/append! db {:thread-id "t1" :msg-id "m1" :kind "spawn" :payload {}})
@@ -39,12 +39,12 @@ a redelivery is an idempotent no-op that returns the original `{:seq n,
 :deduped? true}`. The ledger is the single writer; one handle is one SQLite
 connection.
 
-Run the suite: `cd jolt-ledger && jolt run test/jolt/ledger_test.clj` — 47
+Run the suite: `cd faraday-ledger && jolt run test/jolt/ledger_test.clj` — 47
 checks: seq assignment, redelivery dedup, cross-thread independence, persistence
 across close/reopen, the SPEC.md §1 canonical example, and validation errors.
 
 Smoke gate (CI fast path):
-`cd jolt-ledger && jolt run test/jolt/ledger_smoke.clj` — idempotent redelivery
+`cd faraday-ledger && jolt run test/jolt/ledger_smoke.clj` — idempotent redelivery
 across the close/reopen durable boundary.
 
 ## License
