@@ -1,21 +1,21 @@
-# jolt-rap — RAP tool server + MCP adapter
+# faraday-rap — RAP tool server + MCP adapter
 
 One concrete mechanism: the RAP tool server and MCP adapter for the jolt
 control plane. It runs Tool Invocations (jolt-contracts SPEC.md §3) against a
-jolt-vm-pool, streams results to subscribers, and adapts them to MCP. Each
+faraday-pool, streams results to subscribers, and adapts them to MCP. Each
 invocation has exactly one terminal result, keyed by `call-id`.
 
 ## Use
 
 ```clojure
 ;; deps.edn — published form (after fanout/vm-pool are pushed)
-{:deps {racklr-dev/jolt-rap
-        {:git/url "https://github.com/racklr-dev/jolt-rap"
+{:deps {racklr-dev/faraday-rap
+        {:git/url "https://github.com/racklr-dev/faraday-rap"
          :git/sha "<pinned sha>"}}}
 ```
 
 ```clojure
-(require '[jolt.rap :as rap])
+(require '[faraday.rap :as rap])
 
 (def srv (rap/new-server {:vm-pool pool :fanout rt}))
 (rap/subscribe srv call-id (fn [frame] (println frame)))
@@ -34,7 +34,7 @@ invocations through the gate).
 (def srv (rap/new-server {:vm-pool pool :fanout rt}))
 
 ;; mode 2 — :run-hook (delegate to the plane runner, which gates + spawns + reports)
-(require '[jolt.plane :as plane])
+(require '[faraday.core :as plane])
 (def srv (rap/new-server {:fanout rt
                           :run-hook (fn [request]
                                       ;; request = Sandbox Request; return
@@ -63,18 +63,18 @@ against a real ledger/fanout — `test/jolt/rap_test.clj`. The integration
 test (`test/jolt/rap_integration.clj`) drives a real KVM microVM through a
 real vm-pool and asserts the async terminal result lands via `on-result`.
 
-deps.edn pins jolt-fanout and jolt-vm-pool to their published `:git/sha` values
+deps.edn pins faraday-fanout and faraday-pool to their published `:git/sha` values
 on `https://github.com/racklr-dev`.
 
 ## Running the tests
 
 Unit test (fakes vm-pool/microvm, real ledger/fanout):
 
-    cd jolt-rap && JOLT_SKIP_MIN_VERSION=1 JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/rap_test.clj
+    cd faraday-rap && JOLT_SKIP_MIN_VERSION=1 JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/rap_test.clj
 
 Integration test (real KVM, async result over rap -> vm-pool -> microvm):
 
-    cd jolt-rap && sudo -u jm --preserve-env env JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt PATH=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux:$PATH /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/rap_integration.clj
+    cd faraday-rap && sudo -u jm --preserve-env env JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt PATH=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux:$PATH /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/rap_integration.clj
 
 Prerequisites: /dev/kvm writable (jm in the kvm group) and a jolt binary at
 JOLT_BIN that satisfies the 0.8.28 floor. Never run under `sg kvm`: it makes

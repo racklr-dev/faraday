@@ -1,13 +1,13 @@
-;; jolt-rap integration test (board nc-9464): harness invokes a sandbox tool
+;; faraday-rap integration test (board nc-9464): harness invokes a sandbox tool
 ;; through RAP against a REAL KVM microVM and receives the async result.
 ;; Requires /dev/kvm (jm in the kvm group). NEVER `sg kvm`: it makes kvm the
 ;; primary gid and libkrun virtio-fs guest writes fail EPERM. Run:
-;;   cd jolt-rap && sudo -u jm --preserve-env env JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt PATH=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux:$PATH /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/rap_integration.clj
+;;   cd faraday-rap && sudo -u jm --preserve-env env JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt PATH=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux:$PATH /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/rap_integration.clj
 (ns jolt.integration.rap
-  (:require [jolt.rap :as rap]
-            [jolt.vm-pool :as pool]
-            [jolt.fanout :as fanout]
-            [jolt.ledger :as ledger]
+  (:require [faraday.rap :as rap]
+            [faraday.pool :as pool]
+            [faraday.fanout :as fanout]
+            [faraday.ledger :as ledger]
             [clojure.string :as str]))
 
 (defn check [label expected got]
@@ -22,7 +22,7 @@
 (def cache (str (System/getProperty "user.home") "/.cache/jolt-microvm"))
 (def project-dir (System/getProperty "user.dir"))
 
-(let [lg (ledger/new-ledger {:path (str (System/getProperty "java.io.tmpdir") "/jolt-rap-int-" (System/nanoTime))})
+(let [lg (ledger/new-ledger {:path (str (System/getProperty "java.io.tmpdir") "/faraday-rap-int-" (System/nanoTime))})
       rt (fanout/new-runtime {:ledger lg})
       p (pool/new-pool {:image image :cache-dir cache :project-dir project-dir :max-warm 1})
       srv (rap/new-server {:vm-pool p :fanout rt})

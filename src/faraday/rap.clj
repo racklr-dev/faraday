@@ -1,21 +1,21 @@
-;; jolt-rap: RAP tool server + MCP adapter.
+;; faraday-rap: RAP tool server + MCP adapter.
 ;; A server runs Tool Invocations (jolt-contracts SPEC.md §3) against a
-;; jolt-vm-pool, streams result frames to subscribers, and adapts them to MCP.
+;; faraday-pool, streams result frames to subscribers, and adapts them to MCP.
 ;; Each invocation has exactly one terminal result, keyed by call-id. invoke
 ;; runs asynchronously (a future), so cancel/close can short-circuit a call
 ;; with a terminal cancelled frame before its worker finishes. subscribe and
 ;; on-result may register against a call-id before it has been invoked; those
 ;; land in a pending map and attach when invoke creates the call.
-(ns jolt.rap
+(ns faraday.rap
   "RAP tool server and MCP adapter for the jolt control plane.
 
-  Runs Tool Invocations (jolt-contracts SPEC.md §3) against a jolt-vm-pool,
+  Runs Tool Invocations (jolt-contracts SPEC.md §3) against a faraday-pool,
   streams results to subscribers, and adapts them to MCP. Each invocation has
   exactly one terminal result, keyed by call-id."
   (:refer-clojure :exclude [close])
-  (:require [jolt.vm-pool :as pool]
+  (:require [faraday.pool :as pool]
             [jolt.microvm :as microvm]
-            [jolt.fanout :as fanout]
+            [faraday.fanout :as fanout]
             [clojure.string :as str]))
 
 (defrecord Server [vm-pool fanout policy-hook run-hook state])
@@ -24,7 +24,7 @@
 ;; -- helpers -----------------------------------------------------------------
 
 (defn- fail! [msg data]
-  (throw (ex-info msg (assoc data :jolt.rap/error true))))
+  (throw (ex-info msg (assoc data :faraday.rap/error true))))
 
 (defn- non-empty-string! [v field]
   (when-not (and (string? v) (seq v))
@@ -167,8 +167,8 @@
 ;; -- public API --------------------------------------------------------------
 
 (defn new-server
-  "Open a tool server over opts, a map with :fanout (jolt-fanout runtime) and
-  either :vm-pool (jolt-vm-pool handle) or :run-hook (fn request -> {:status
+  "Open a tool server over opts, a map with :fanout (faraday-fanout runtime) and
+  either :vm-pool (faraday-pool handle) or :run-hook (fn request -> {:status
   :ok|:error|:denied :exit int? :stdout string? :stderr string? :error map?}),
   plus an optional :policy-hook (fn call -> truthy to permit, nil = always
   permit). When :run-hook is given it replaces the acquire/exec/release path

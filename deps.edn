@@ -1,9 +1,9 @@
 {:paths ["src"]
 
- :deps {racklr-dev/jolt-fanout
-        {:git/url "https://github.com/racklr-dev/jolt-fanout"
-         :git/sha "1de939ad40c1ed5e3ad1e02e9a2fb80d83db3500"}
+ :deps {racklr-dev/faraday-fanout
+        {:git/url "https://github.com/racklr-dev/faraday-fanout"
+         :git/sha "95000b93a69cddef1909738b96757f831d474e4c"}
 
-        racklr-dev/jolt-vm-pool
-        {:git/url "https://github.com/racklr-dev/jolt-vm-pool"
-         :git/sha "be1ef10e84a8878921d50093517aa51a99dadaf7"}}}
+        racklr-dev/faraday-pool
+        {:git/url "https://github.com/racklr-dev/faraday-pool"
+         :git/sha "39c3ee700c979e88ae3ba5256f90b8fae370b255"}}}

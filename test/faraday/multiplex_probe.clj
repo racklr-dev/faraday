@@ -1,12 +1,12 @@
 ;; jolt multiplex/throughput probe: N concurrent rap invokes over a warm pool
 ;; of max-warm K against real KVM. Counts real microvm/start! boots to prove
 ;; warm reuse (boots == min(N,K), not N), and reports exec/s + heap. Run:
-;;   cd jolt-rap && sudo -u jm --preserve-env env JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt MP_N=6 MP_K=2 PATH=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux:$PATH /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/multiplex_probe.clj
+;;   cd faraday-rap && sudo -u jm --preserve-env env JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt MP_N=6 MP_K=2 PATH=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux:$PATH /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/multiplex_probe.clj
 (ns jolt.multiplex-probe
-  (:require [jolt.rap :as rap]
-            [jolt.vm-pool :as pool]
-            [jolt.fanout :as fanout]
-            [jolt.ledger :as ledger]
+  (:require [faraday.rap :as rap]
+            [faraday.pool :as pool]
+            [faraday.fanout :as fanout]
+            [faraday.ledger :as ledger]
             [jolt.microvm :as microvm]))
 
 (def N (if-let [v (System/getenv "MP_N")] (Long/parseLong v) 6))

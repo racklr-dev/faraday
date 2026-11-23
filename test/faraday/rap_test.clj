@@ -1,11 +1,11 @@
-;; jolt-rap unit test: run Tool Invocations against a faked vm-pool/microvm and
+;; faraday-rap unit test: run Tool Invocations against a faked vm-pool/microvm and
 ;; a real ledger/fanout, exercising invoke/cancel/close + callbacks + subscriptions.
-;; Run: cd jolt-rap && jolt run test/jolt/rap_test.clj
+;; Run: cd faraday-rap && jolt run test/jolt/rap_test.clj
 (ns jolt.test.rap
-  (:require [jolt.rap :as rap]
-            [jolt.ledger :as ldg]
-            [jolt.fanout :as fanout]
-            [jolt.vm-pool :as pool]
+  (:require [faraday.rap :as rap]
+            [faraday.ledger :as ldg]
+            [faraday.fanout :as fanout]
+            [faraday.pool :as pool]
             [jolt.microvm :as microvm]))
 
 (defn check [label expected got]
@@ -25,9 +25,9 @@
     (if (= ::no-throw e) ::no-throw (get (ex-data e) :type))))
 
 (defn tmp-dir []
-  (str (System/getProperty "java.io.tmpdir") "/jolt-rap-test-" (System/nanoTime)))
+  (str (System/getProperty "java.io.tmpdir") "/faraday-rap-test-" (System/nanoTime)))
 
-;; -- fakes for jolt.vm-pool / jolt.microvm -----------------------------------
+;; -- fakes for faraday.pool / jolt.microvm -----------------------------------
 (def acquired (atom []))
 (def released (atom []))
 (def exec-cmds (atom []))
@@ -55,8 +55,8 @@
   @exec-result)
 
 (defmacro with-fakes [& body]
-  `(with-redefs [jolt.vm-pool/acquire fake-acquire
-                 jolt.vm-pool/release fake-release
+  `(with-redefs [faraday.pool/acquire fake-acquire
+                 faraday.pool/release fake-release
                  jolt.microvm/exec fake-exec]
      ~@body))
 
