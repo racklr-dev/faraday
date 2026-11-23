@@ -10,6 +10,6 @@
 
         racklr-dev/faraday-core
         {:git/url "https://github.com/racklr-dev/faraday-core"
-         :git/sha "348bfa351f9cb7c59d1553b784bd1cbb72251bfc"}}
+         :git/sha "593ab3f349b1f43818ba68cce7fde98e19e04a11"}}
 
  :aliases {:serve {:main-opts ["-m" "faraday.console.main"]}}}
