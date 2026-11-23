@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "egress-id": "egr_01J8VK2Q",
+  "dns": ["1.1.1.1"],
+  "allow-cidrs": ["1.1.1.1/32"],
+  "deny-cidrs": ["8.8.8.8/32"],
+  "host-gateway": true,
+  "default": "deny"
+}

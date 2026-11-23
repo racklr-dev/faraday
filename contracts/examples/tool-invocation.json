@@ -1,0 +1,8 @@
+{
+  "v": 1,
+  "call-id": "call_01J8VK2Q",
+  "thread-id": "thr_01J8VK2Q",
+  "name": "run_shell",
+  "args": { "argv": ["ls", "-la"] },
+  "display-as": "ls -la"
+}

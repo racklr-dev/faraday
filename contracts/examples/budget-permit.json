@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "permit-id": "perm_01J8VK2Q",
+  "owner": "thr_01J8VK2Q",
+  "cost": { "cpu": 1, "mem-mb": 512 },
+  "priority": 0,
+  "timeout-ms": 30000,
+  "status": "granted"
+}
