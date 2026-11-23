@@ -24,10 +24,17 @@ export JOLT_CEDAR_LIB=/home/jm/projects/jolt/jolt-cedar/native/target/release/li
 # http://127.0.0.1:8787
 ```
 
-The default config opens a permit-all plane with a small budget; see
-`src/jolt/dashboard/main.clj` for the demo policy.
+The default config opens an identity-scoped plane (alice/bob permitted, others
+denied by default; an egress forbid drops anything touching 8.8.8.8/32) and
+drives a rotating demo through the real RAP run-hook, so every view has live
+data.
 
 ## Status
 
-M0 — SSE emitter + board sampler + shell. The budget gauge and pool counts
-live-update in the browser from a real `jolt.plane`.
+M1 — full control-plane MVP. Seven views (Overview, Runs, Agents, Threads,
+VMs, Policy, Egress) switched client-side by a `$view` signal; a live SSE
+board (plane stats, gate decisions, runs, calls, threads, sandboxes); a Cedar
+dry-run simulator (identity + egress); and the actions cancel, ad-hoc run, and
+thread drill-in. The full plane stack (cedar + admission + vm-pool + fanout +
+ledger + rap) runs in-process with the microvm boundary faked (no KVM). See
+docs/ux-plan.md for the v1.1 backlog.
