@@ -9,13 +9,10 @@
          :git/sha "2eaafe111343d3457597a144779dba9ed5eaccae"}
 
         racklr-dev/faraday-pool
-        {:git/url "https://github.com/racklr-dev/faraday-pool"
-         :git/sha "cbcb3f92b25e94372ff8034ef409ef90c8774584"}
+        {:local/root "../pool"}
 
         racklr-dev/faraday-fanout
-        {:git/url "https://github.com/racklr-dev/faraday-fanout"
-         :git/sha "efd112f5e08398a1c6f77b8f8cadee60143f91c5"}
+        {:local/root "../fanout"}
 
         racklr-dev/faraday-rap
-        {:git/url "https://github.com/racklr-dev/faraday-rap"
-         :git/sha "3b2fed0bd804ca7964531c6bb8bdf383b04578ef"}}}
+        {:local/root "../rap"}}}

@@ -1,0 +1,6 @@
+.cpcache/
+.jolt/
+target/
+*.db
+*.db-shm
+*.db-wal

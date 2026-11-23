@@ -1,0 +1,5 @@
+{:paths []
+
+ :aliases
+ {:serve {:extra-deps {racklr-dev/faraday-console {:local/root "console"}}
+          :main-opts ["-m" "faraday.console.main"]}}}
