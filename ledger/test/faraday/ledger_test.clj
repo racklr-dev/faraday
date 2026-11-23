@@ -193,6 +193,23 @@
   (check "new-ledger creates parent dirs" true (fn? ledger/append!))
   (ledger/close! db))
 
+;; --- concurrent appends are serialized (single writer) ----------------------
+(with-ledger
+  (fn [db _]
+    (let [fs (doall (for [t (range 8)]
+                      (future
+                        (try
+                          (dotimes [i 10]
+                            (ledger/append! db (msg (str "ct" t) (str "cm" t "-" i))))
+                          :ok
+                          (catch Throwable e [:err (ex-message e)])))))
+          results (mapv deref fs)]
+      (check "all concurrent writers ok"
+             [:ok :ok :ok :ok :ok :ok :ok :ok] results)
+      (check "each concurrent writer appended 10"
+             [10 10 10 10 10 10 10 10]
+             (mapv (fn [t] (count (ledger/history db (str "ct" t)))) (range 8))))))
+
 (if (zero? @failures)
   (println "ALL TESTS PASSED")
   (do (println (str @failures " FAILURES"))

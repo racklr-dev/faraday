@@ -2,15 +2,19 @@
 ;; Storage is sqlite via jolt-lang/db (db.sqlite), one connection per ledger.
 ;; The ledger is the single writer for Thread Messages (faraday-contracts SPEC.md
 ;; §1): it assigns each message a per-thread monotonic :seq, dedups on :msg-id,
-;; and answers history/processed queries. The durable body of each message is
-;; the canonical wire JSON (string keys), read back as keyword-keyed maps.
+;; and answers history/processed queries. A per-ledger lock serializes every
+;; operation on the connection, so N concurrent writers (agent fanout) append
+;; safely. The durable body of each message is the canonical wire JSON (string
+;; keys), read back as keyword-keyed maps.
 (ns faraday.ledger
   "Durable, idempotent thread state for the jolt control plane.
 
   The ledger is the single writer for Thread Messages (faraday-contracts
   SPEC.md §1): it assigns each message a per-thread monotonic seq,
-  dedups on msg-id, and answers history/processed queries. Storage is
-  delegated to jolt-lang/db (SQLite through db.sqlite)."
+  dedups on msg-id, and answers history/processed queries. A per-ledger lock
+  serializes access to its single sqlite connection, so concurrent writers
+  append safely. Storage is delegated to jolt-lang/db (SQLite through
+  db.sqlite)."
   (:require [db.sqlite :as sql]
             [clojure.data.json :as json]
             [clojure.edn :as edn]))
@@ -76,7 +80,7 @@
 (defn- with-tx
   "Run f with an open BEGIN IMMEDIATE transaction; COMMIT on success, ROLLBACK
   on any throw. IMMEDIATE takes the write lock up front so the dedup check and
-  the seq assignment are one atomic unit."
+  the seq assignment are one atomic unit. The caller holds the per-ledger lock."
   [conn f]
   (sql/query conn "BEGIN IMMEDIATE" [])
   (try
@@ -96,7 +100,7 @@
 (defn new-ledger
   "Open (or create) a ledger rooted at opts, a map with at least :path.
   Returns an opaque ledger handle. Creates the parent directory if needed,
-  then the messages/threads tables on first open."
+  then the messages/threads/pointers tables on first open."
   [opts]
   (let [path (or (:path opts)
                  (fail! "new-ledger requires a :path" {:opts opts}))
@@ -114,12 +118,14 @@
                  "create index if not exists messages_thread_seq on messages(thread_id, seq)"
                  [])
       (sql/query conn
-                 "create table if not exists threads (thread_id text primary key, last_seq integer not null)"
+                 (str "create table if not exists threads (thread_id text primary key, "
+                      "last_seq integer not null)")
                  [])
       (sql/query conn
-                 "create table if not exists pointers (name text primary key, value text not null, ts text not null)"
+                 (str "create table if not exists pointers (name text primary key, "
+                      "value text not null, ts text not null)")
                  [])
-      {:conn conn :path path :closed (atom false)}
+      {:conn conn :path path :closed (atom false) :lock (Object.)}
       (catch Throwable t
         (try (sql/close conn) (catch Throwable _))
         (throw t)))))
@@ -128,56 +134,61 @@
   "Append one Thread Message map (SPEC.md §1) to the ledger.
   Assigns the next :seq for its :thread-id; if a message with the same
   :msg-id was already appended, returns the original result and does not
-  duplicate it. Returns {:seq n, :deduped? bool}."
+  duplicate it. Concurrency-safe: access to the connection is serialized.
+  Returns {:seq n, :deduped? bool}."
   [ledger msg]
   (validate! msg)
-  (let [conn (:conn ledger)
-        thread-id (:thread-id msg)
-        msg-id (:msg-id msg)]
-    (with-tx conn
-      (fn []
-        (if-let [existing (first (sql/query conn
-                                            "select seq from messages where msg_id = ?"
-                                            [msg-id]))]
-        {:seq (:seq existing) :deduped? true}
-        (let [cur (first (sql/query conn
-                                    "select last_seq from threads where thread_id = ?"
-                                    [thread-id]))
-              next-seq (if cur (inc (long (:last_seq cur))) 0)
-              body (json/write-str (normalize msg next-seq))]
-          (sql/query conn
-                     "insert into messages (msg_id, thread_id, seq, body) values (?, ?, ?, ?)"
-                     [msg-id thread-id next-seq body])
-          (if cur
-            (sql/query conn "update threads set last_seq = ? where thread_id = ?"
-                       [next-seq thread-id])
-            (sql/query conn "insert into threads (thread_id, last_seq) values (?, ?)"
-                       [thread-id next-seq]))
-          {:seq next-seq :deduped? false}))))))
+  (locking (:lock ledger)
+    (let [conn (:conn ledger)
+          thread-id (:thread-id msg)
+          msg-id (:msg-id msg)]
+      (with-tx conn
+        (fn []
+          (if-let [existing (first (sql/query conn
+                                              "select seq from messages where msg_id = ?"
+                                              [msg-id]))]
+            {:seq (:seq existing) :deduped? true}
+            (let [cur (first (sql/query conn
+                                        "select last_seq from threads where thread_id = ?"
+                                        [thread-id]))
+                  next-seq (if cur (inc (long (:last_seq cur))) 0)
+                  body (json/write-str (normalize msg next-seq))]
+              (sql/query conn
+                         "insert into messages (msg_id, thread_id, seq, body) values (?, ?, ?, ?)"
+                         [msg-id thread-id next-seq body])
+              (if cur
+                (sql/query conn "update threads set last_seq = ? where thread_id = ?"
+                           [next-seq thread-id])
+                (sql/query conn "insert into threads (thread_id, last_seq) values (?, ?)"
+                           [thread-id next-seq]))
+              {:seq next-seq :deduped? false})))))))
 
 (defn history
   "Return the messages of thread-id in :seq order, as a vector of maps
   (keyword-keyed, the assigned :seq included)."
   [ledger thread-id]
-  (mapv (fn [row] (keywordize (json/read-str (:body row))))
-        (sql/query (:conn ledger)
-                   "select body from messages where thread_id = ? order by seq"
-                   [thread-id])))
+  (locking (:lock ledger)
+    (mapv (fn [row] (keywordize (json/read-str (:body row))))
+          (sql/query (:conn ledger)
+                     "select body from messages where thread_id = ? order by seq"
+                     [thread-id]))))
 
 (defn processed?
   "True iff a message with msg-id has already been appended (idempotency probe)."
   [ledger msg-id]
-  (boolean (seq (sql/query (:conn ledger)
-                           "select 1 from messages where msg_id = ? limit 1"
-                           [msg-id]))))
+  (locking (:lock ledger)
+    (boolean (seq (sql/query (:conn ledger)
+                             "select 1 from messages where msg_id = ? limit 1"
+                             [msg-id])))))
 
 (defn last-seq
   "The highest :seq seen for thread-id, or nil if none."
   [ledger thread-id]
-  (let [row (first (sql/query (:conn ledger)
-                              "select last_seq from threads where thread_id = ?"
-                              [thread-id]))]
-    (when row (:last_seq row))))
+  (locking (:lock ledger)
+    (let [row (first (sql/query (:conn ledger)
+                                "select last_seq from threads where thread_id = ?"
+                                [thread-id]))]
+      (when row (:last_seq row)))))
 
 ;; -- durable named pointers -------------------------------------------------
 ;; A pointer is a durable, single-writer head under a stable name: exactly
@@ -189,44 +200,50 @@
   "Durably point name at value (EDN), replacing any previous pointer of the
   same name in place. Returns value."
   [ledger name value]
-  (let [conn (:conn ledger)
-        ts (str (java.time.Instant/now))
-        text (pr-str value)]
-    (sql/query conn
-               "insert into pointers (name, value, ts) values (?, ?, ?) on conflict(name) do update set value = excluded.value, ts = excluded.ts"
-               [name text ts])
-    value))
+  (locking (:lock ledger)
+    (let [conn (:conn ledger)
+          ts (str (java.time.Instant/now))
+          text (pr-str value)]
+      (sql/query conn
+                 (str "insert into pointers (name, value, ts) values (?, ?, ?) "
+                      "on conflict(name) do update set value = excluded.value, ts = excluded.ts")
+                 [name text ts])
+      value)))
 
 (defn pointer
   "The value name points at, or nil if there is no such pointer."
   [ledger name]
-  (let [row (first (sql/query (:conn ledger)
-                              "select value from pointers where name = ?"
-                              [name]))]
-    (when row
-      (edn/read-string (:value row)))))
+  (locking (:lock ledger)
+    (let [row (first (sql/query (:conn ledger)
+                                "select value from pointers where name = ?"
+                                [name]))]
+      (when row
+        (edn/read-string (:value row))))))
 
 (defn delete-pointer!
   "Remove name's pointer. Returns true if it was present, false otherwise."
   [ledger name]
-  (let [conn (:conn ledger)
-        had (boolean (seq (sql/query conn
-                                     "select 1 from pointers where name = ?"
-                                     [name])))]
-    (sql/query conn "delete from pointers where name = ?" [name])
-    had))
+  (locking (:lock ledger)
+    (let [conn (:conn ledger)
+          had (boolean (seq (sql/query conn
+                                       "select 1 from pointers where name = ?"
+                                       [name])))]
+      (sql/query conn "delete from pointers where name = ?" [name])
+      had)))
 
 (defn pointers
   "All pointers, as a name -> value map."
   [ledger]
-  (reduce (fn [m row]
-            (assoc m (:name row) (edn/read-string (:value row))))
-          {}
-          (sql/query (:conn ledger) "select name, value from pointers order by name" [])))
+  (locking (:lock ledger)
+    (reduce (fn [m row]
+              (assoc m (:name row) (edn/read-string (:value row))))
+            {}
+            (sql/query (:conn ledger) "select name, value from pointers order by name" []))))
 
 (defn close!
   "Flush and close the ledger. Idempotent: a second close is a no-op."
   [ledger]
-  (when (compare-and-set! (:closed ledger) false true)
-    (sql/close (:conn ledger)))
+  (locking (:lock ledger)
+    (when (compare-and-set! (:closed ledger) false true)
+      (sql/close (:conn ledger))))
   nil)
