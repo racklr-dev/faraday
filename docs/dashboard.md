@@ -35,7 +35,7 @@ build step.
 | tool server | faraday-rap | `invoke`, `subscribe`, `on-result` | `invoke`, `cancel`, `close`, `close!` |
 | warm VMs | faraday-pool | `stats` `{:warm :total :snapshots}` | `acquire`, `release`, `hibernate`, `restore` |
 | threads | faraday-fanout + faraday-ledger | `history`, `last-seq` | `spawn`, `inherit`, `report`, `yield` |
-| cache | jolt-memo | `stats` `{:entries :bytes}`, `get` | `put!`, `delete!` |
+| cache | faraday-memo | `stats` `{:entries :bytes}`, `get` | `put!`, `delete!` |
 | budget | jolt-admission | `stats` `{:budget :used :granted :waiting}` | `acquire!`, `release!` |
 | policy | jolt-cedar | `authorized?`, `validate` | validate before apply |
 
@@ -58,7 +58,7 @@ faraday-console  (Clojure, jolt — new repo racklr-dev/faraday-console)
         │  SSE + reactive diff/patch by glimmer-datastar (wrap-datastar)
         ▼
   faraday-core · faraday-rap · faraday-pool · faraday-fanout+faraday-ledger ·
-  jolt-memo · jolt-admission · jolt-cedar
+  faraday-memo · jolt-admission · jolt-cedar
 ```
 
 The dashboard composes the libraries in-process; it is not a separate service

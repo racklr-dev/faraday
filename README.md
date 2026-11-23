@@ -2,7 +2,7 @@
 
 One concrete mechanism: the plane daemon that ties the two security seams
 into one gate. A sandbox run is authorized by the Cedar policy engine
-(jolt-cedar, jolt-contracts SPEC §6) and only then admitted under a resource
+(jolt-cedar, faraday-contracts SPEC §6) and only then admitted under a resource
 budget (jolt-admission, SPEC §5). `gate` is that gate; `new-runner`/`run-sandbox!`
 wire that gate together with a warm VM pool (faraday-pool) and a fanout runtime
 (faraday-fanout) into the N-sandbox execution loop; the CLI in
