@@ -19,10 +19,11 @@ pinned git dependencies.
 | `core/` | faraday.core | the plane: budget admission + Cedar authorization + sandbox runs |
 | `pool/` | faraday.pool | warm VM pool over jolt-microvm + jolt-oci |
 | `rap/` | faraday.rap | tool invocation server (requests → runs) |
-| `agent/` | faraday.agent | the agent framework: drives an agent's tool-calling loop over rap |
+| `agent/` | faraday.agent | the agent framework: loop-as-data, model step-fn, and the launch/steer/observe harness over rap |
 | `fanout/` | faraday.fanout | thread-message fanout over the ledger |
 | `ledger/` | faraday.ledger | single writer, append-only thread ledger |
 | `memo/` | faraday.memo | content-addressed message memoization |
+| `memory/` | faraday.memory | two-tier agent memory + FTS5 over ledger/memo + checkpoint/resume |
 | `console/` | faraday.console | the web console (glimmer-datastar + SSE) |
 
 Internal modules reference each other via `:local/root`; each module keeps its
@@ -50,7 +51,9 @@ the gate, not a client, so the budget/policy gate stays authoritative.
 ## Status
 
 beta — the MVP plane runs end-to-end in-process: real KVM sandboxes, Cedar
-authorization, budget admission, ledger/fanout, and the live console. See each
+authorization, budget admission, ledger/fanout, the live console, and the
+agent stack (loop-as-data manifests with a soak/rollback gate, robust model
+step-fn, two-tier memory, and the launch/steer/observe harness). See each
 module's README for what its own tests cover.
 
 ## License

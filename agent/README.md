@@ -38,6 +38,19 @@ planner, or dsh-superagent's subprocess backend shimmed onto rap — plugs in as
 `scripted-agent` replays a fixed list of actions and is the test/demo agent.
 `run-all!` fans N independent agent tasks out concurrently over one rap server.
 
+## Namespaces
+
+- `faraday.agent` — the loop (`run!`, `:goal` stop-condition, `run-all!`).
+- `faraday.agent.loop` — loop-as-data: the turn loop is an EDN manifest in memo,
+  validated by the plane and promoted through a soak/rollback gate.
+- `faraday.agent.model` — a robust model step-fn (repair→validate→escalate→
+  circuit-break) over a provider alias/role config.
+- `faraday.agent.harness` — the operator surface: launch/steer/observe N agents.
+
+Each namespace has a test under `test/faraday/` (`agent_test`, `loop_test`,
+`model_test`, `harness_test`); run with `jolt run test/faraday/<name>.clj` from
+this module.
+
 ## Status
 
 Implemented. `run!` drives a scripted agent through three sandbox execs and
