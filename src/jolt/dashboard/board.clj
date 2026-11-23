@@ -13,7 +13,8 @@
                        :used {:cpu 0 :mem-mb 0} :granted 0 :waiting 0}
                :pool {:warm 0 :total 0 :snapshots 0 :sandboxes []}
                :gate [] :runs [] :calls []
-               :policies [] :egress [] :image "" :notice nil}))
+               :policies [] :egress [] :image "" :notice nil
+               :dry-result nil :thread-detail nil}))
 
 (defn sample!
   "Read live counters (plane stats, pool, RAP calls) into the board."
@@ -31,6 +32,16 @@
          :policies (vec (:policies runtime))
          :egress (mapv val (sort-by key (:egress runtime)))
          :image (:image runtime)))
+
+(defn show-dry-result!
+  "Persist a simulator decision so the live Policy view keeps rendering it."
+  [d]
+  (swap! board assoc :dry-result d))
+
+(defn show-thread!
+  "Persist the selected thread + messages so the live Threads view keeps them."
+  [tid msgs]
+  (swap! board assoc :thread-detail {:thread-id tid :msgs msgs}))
 
 (defn- decision-for [result]
   (case (:status result)

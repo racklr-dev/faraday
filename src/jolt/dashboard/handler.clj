@@ -91,9 +91,8 @@ footer{padding:8px 16px;font-size:11px;color:#8b949e}")
                           "RunSandbox"
                           (:image @runtime)
                           (or (:egress q) "egr_clean"))]
-        {:status 200
-         :headers {"Content-Type" "text/html; charset=utf-8"}
-         :body (h/html (views/dry-result d))})
+        (board/show-dry-result! d)
+        {:status 204})
 
       "/cancel"
       (do (when-let [cid (:call-id (query-params req))]
@@ -119,9 +118,8 @@ footer{padding:8px 16px;font-size:11px;color:#8b949e}")
       (let [q (query-params req)
             tid (:thread-id q)
             msgs (if tid (rt/history @runtime tid) [])]
-        {:status 200
-         :headers {"Content-Type" "text/html; charset=utf-8"}
-         :body (h/html (views/thread-detail (or tid "") msgs))})
+        (board/show-thread! (or tid "") msgs)
+        {:status 204})
 
       {:status 404
        :headers {"Content-Type" "text/plain; charset=utf-8"}

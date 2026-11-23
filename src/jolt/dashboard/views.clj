@@ -11,6 +11,8 @@
    ["threads" "Threads"] ["vms" "VMs"] ["policy" "Policy"]
    ["egress" "Egress"]])
 
+(declare dry-result thread-detail)
+
 (defn- pct [used budget]
   (if (and budget (pos? budget)) (min 100 (int (* 100.0 (/ used budget)))) 0))
 
@@ -40,7 +42,7 @@
      [:nav {:id "nav"}
       (for [[k label] nav-items]
         [:button {:id (str "nav-" k)
-                  :data-on-click (str "$view = '" k "'")}
+                  :data-on:click (str "$view = '" k "'")}
          label])]]))
 
 (defn overview-panel [b]
@@ -131,7 +133,7 @@
             [:td {:class (str "d " (:status c))} (:status c)]
             [:td (str (:exit-code c))]
             [:td (when (= "running" (:status c))
-                   [:button {:data-on-click
+                   [:button {:data-on:click
                              (str "@get('/cancel?call-id=" (:call-id c) "')")}
                     "cancel"])]])]]]]]))
 
@@ -150,12 +152,13 @@
       [:tbody
        (for [t threads]
          [:tr {:id (str "thread-" (:id t))}
-          [:td [:button {:data-on-click (str "@get('/thread?thread-id=" (:id t) "')")
-                         :data-selector "#thread-detail"}
+          [:td [:button {:data-on:click (str "@get('/thread?thread-id=" (:id t) "')")}
                 (:id t)]]
           [:td (:agent t)] [:td (:n t)] [:td (:last t)]])]]
-     [:div {:id "thread-detail" :class "card"}
-      [:p "select a thread to see its messages"]]]))
+     (if-let [td (:thread-detail b)]
+       (thread-detail (:thread-id td) (:msgs td))
+       [:div {:id "thread-detail" :class "card"}
+        [:p "select a thread to see its messages"]])]))
 
 (defn vms-panel [b]
   (let [pool (:pool b)]
@@ -179,8 +182,7 @@
          [:p "none — a sandbox appears while a run is live"])]]]))
 
 (defn dry-btn [label qs]
-  [:button {:data-on-click (str "@get('" qs "')")
-            :data-selector "#dry-result"}
+  [:button {:data-on:click (str "@get('" qs "')")}
    label])
 
 (defn policy-panel [b]
@@ -199,7 +201,9 @@
       [dry-btn "alice + bad egress" "/dry-run?principal=alice&egress=egr_bad"]
       [dry-btn "mallory + clean" "/dry-run?principal=mallory&egress=egr_clean"]
       [dry-btn "bob + public" "/dry-run?principal=bob&egress=egr_public"]]
-     [:div {:id "dry-result"} [:p "pick a scenario —"]]]]])
+     (if-let [d (:dry-result b)]
+       (dry-result d)
+       [:div {:id "dry-result"} [:p "pick a scenario —"]])]]])
 
 (defn egress-panel [b]
   [:section {:id "view-egress" :class "view" :data-show "$view == 'egress'"}
