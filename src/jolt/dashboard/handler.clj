@@ -103,7 +103,7 @@ footer{padding:8px 16px;font-size:11px;color:#8b949e}")
       "/run"
       (let [q (query-params req)
             agent (or (:agent q) "alice")
-            argv (str/split (or (:argv q) "echo hi") #"\\s+")
+            argv (str/split (or (:argv q) "echo hi") #"\s+")
             call {:v 1
                   :call-id (str "call_" (System/nanoTime))
                   :thread-id (str "agent-" agent)

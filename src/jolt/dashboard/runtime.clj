@@ -1,19 +1,18 @@
-;; Open the full plane stack with the microvm boundary faked (no KVM) and
-;; expose the read/act surface the dashboard renders: plane + pool stats,
-;; gate decisions, runs (through the RAP run-hook), calls, threads, policies,
-;; egress, and the actions submit-run!, cancel!, dry-run.
+;; Open the full plane stack with a REAL KVM microvm boundary (jolt-microvm
+;; + libkrun 2.0): plane + pool stats, gate decisions, runs through the RAP
+;; run-hook (default plane exec = in-guest ssh exec), calls, threads,
+;; policies, egress, and the actions submit-run!, cancel!, dry-run.
 (ns jolt.dashboard.runtime
   (:require [clojure.string :as str]
             [jolt.plane :as plane]
             [jolt.vm-pool :as pool]
             [jolt.fanout :as fanout]
             [jolt.ledger :as ledger]
-            [jolt.rap :as rap]
-            [jolt.microvm :as microvm]))
+            [jolt.rap :as rap]))
 
 (def q (str (char 34)))
 
-(def image "oci://ghcr.io/jolt-lang/distroless-base@sha256:abc")
+(def image "alpine:3.20")
 
 (def policies
   "Identity-scoped: alice + bob may run; anything reaching 8.8.8.8/32 is
@@ -53,18 +52,15 @@
   (let [root (str "/tmp/jolt-dashboard-" (System/nanoTime))
         db (ledger/new-ledger {:path (str root "/ledger.db")})
         fan (fanout/new-runtime {:ledger db})
-        pl (pool/new-pool {:image image :cache-dir (str root "/cache") :max-warm 4})
+        pl (pool/new-pool {:image image :cache-dir "/home/jm/.cache/jolt-microvm" :max-warm 4})
         plane (plane/new-plane {:budget {:cpu 4 :mem-mb 4096}
                                 :weights {:cpu 1 :mem-mb 1}
                                 :policy-set {:policies policies :schema {} :entities []}})
         calls (atom {})
-        exec-hook (fn [_ request]
-                    (let [argv (str/join " " (:argv request))]
-                      (if (str/includes? argv "fail")
-                        {:exit 1 :stdout (str "failing: " argv) :stderr "boom"}
-                        {:exit 0 :stdout (str "ok: " argv) :stderr ""})))
+        ;; default plane exec-hook runs argv in-guest over SSH (microvm/exec);
+        ;; no fake boundary.
         runner (plane/new-runner {:plane plane :pool pl :fanout fan
-                                  :exec-hook exec-hook :egress egresses})
+                                  :egress egresses})
         run-hook (fn [request]
                    (let [info (get @calls (:request-id request))
                          request (cond-> request
@@ -74,9 +70,6 @@
                      (when-let [cb (:on-run opts)] (cb info result))
                      result))
         srv (rap/new-server {:fanout fan :run-hook run-hook})]
-    ;; no KVM: the pool boots a fake microvm and our exec-hook runs argv
-    (alter-var-root #'microvm/start! (constantly (fn [_] {:fake-vm true})))
-    (alter-var-root #'microvm/stop!  (constantly (fn [_] nil)))
     {:plane plane :pool pl :fanout fan :ledger db :runner runner :rap srv
      :root root :calls calls :policies policies :egress egresses :image image}))
 
