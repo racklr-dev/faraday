@@ -118,7 +118,7 @@
 
 (with-ledger
   (fn [db _]
-    ;; The canonical vector from jolt-contracts examples/thread-message.json,
+    ;; The canonical vector from faraday-contracts examples/thread-message.json,
     ;; in the ledger's keyword-keyed in-process form.
     (let [ex {:v 1
               :thread-id "thr_01J8VK2Q"

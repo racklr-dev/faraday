@@ -6,7 +6,7 @@ control plane. It assigns each message a per-thread monotonic `seq`, dedups on
 `jolt-lang/db`.
 
 Standalone: nothing else in the control plane is required. It implements
-[jolt-contracts](https://github.com/racklr-dev/jolt-contracts) SPEC.md §1
+[faraday-contracts](https://github.com/racklr-dev/faraday-contracts) SPEC.md §1
 (Thread Message).
 
 ## Use
