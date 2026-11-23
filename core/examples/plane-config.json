@@ -1,0 +1,9 @@
+{
+  "budget": {"cpu": 4, "mem-mb": 4096},
+  "weights": {"cpu": 1, "mem-mb": 1},
+  "policy-set": {
+    "policies": ["permit(principal, action, resource);"],
+    "schema": {},
+    "entities": []
+  }
+}

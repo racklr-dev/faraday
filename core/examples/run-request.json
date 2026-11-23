@@ -1,0 +1,11 @@
+{
+  "request-id": "req_demo_01",
+  "principal": {"type": "Agent", "id": "alice"},
+  "action": {"type": "Action", "id": "exec"},
+  "resource": {"type": "Image", "id": "oci://ghcr.io/jolt-lang/distroless-base@sha256:deadbeef"},
+  "context": {"egress": {"dns": ["1.1.1.1"], "allow-cidrs": ["1.1.1.1/32"], "host-gateway": true, "default": "deny"}},
+  "owner": "thr_demo_01",
+  "cost": {"cpu": 1, "mem-mb": 512},
+  "priority": 0,
+  "timeout-ms": 30000
+}
