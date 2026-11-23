@@ -1,0 +1,5 @@
+{:paths ["src"]
+
+ :deps {racklr-dev/faraday-ledger
+        {:git/url "https://github.com/racklr-dev/faraday-ledger"
+         :git/sha "ca686e74bb5ee04dcc540930391516efd4436aae"}}}
