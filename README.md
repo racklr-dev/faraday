@@ -4,7 +4,7 @@ One concrete mechanism: a warm pool of microVMs for the jolt control plane.
 It hands out sandboxes from `jolt-microvm` images resolved by `jolt-oci`,
 reuses released ones, and hibernates idle sandboxes to snapshots that can be
 restored later. It consumes the Sandbox Request contract
-(jolt-contracts SPEC.md §2) and can take an optional admission hook (Budget
+(faraday-contracts SPEC.md §2) and can take an optional admission hook (Budget
 Permit seam, SPEC.md §5).
 
 ## Use

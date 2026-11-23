@@ -4,7 +4,7 @@
 ;; while the live count is under :max-warm, and blocks until a release when
 ;; the pool is full; release evicts the least-recently-released VM past
 ;; :max-warm; hibernate/restore suspend and resume via snapshots. The Sandbox
-;; Request is jolt-contracts SPEC.md §2; the pool owns VM lifecycle only:
+;; Request is faraday-contracts SPEC.md §2; the pool owns VM lifecycle only:
 ;; running the request argv is the caller's job via (jolt.microvm/exec ...).
 (ns faraday.pool
   "Warm VM pool and snapshot hibernate for the jolt control plane.
@@ -12,7 +12,7 @@
   The pool hands out warm microVMs (jolt-microvm) from jolt-oci images,
   reuses released ones (LRU across the warm set), and hibernates idle
   sandboxes to snapshots that can be restored later. A Sandbox Request is
-  the jolt-contracts SPEC.md §2 shape. An optional admission hook (Budget
+  the faraday-contracts SPEC.md §2 shape. An optional admission hook (Budget
   Permit seam, SPEC.md §5) can gate acquire without a contract change.
 
   acquire/release/hibernate/restore/close! are concurrency-safe: a per-pool
