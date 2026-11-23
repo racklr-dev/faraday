@@ -1,7 +1,7 @@
-;; jolt-plane smoke: the gate wires budget + policy.
-;; Run: cd jolt-plane && JOLT_CEDAR_LIB=<libcedar_policy.so path> jolt run test/jolt/plane_test.clj
+;; faraday-core smoke: the gate wires budget + policy.
+;; Run: cd faraday-core && JOLT_CEDAR_LIB=<libcedar_policy.so path> jolt run test/jolt/plane_test.clj
 (ns jolt.test.plane
-  (:require [jolt.plane :as plane]))
+  (:require [faraday.core :as plane]))
 
 (defn check [label expected got]
   (if (= expected got)
@@ -79,4 +79,4 @@
          true (try (plane/gate plane (req "alice" 1)) false
                    (catch Exception e (boolean (re-find #"closed" (ex-message e)))))))
 
-(println "jolt-plane smoke: all green")
+(println "faraday-core smoke: all green")

@@ -1,7 +1,7 @@
-# jolt-plane dashboard — Datastar + Rocket Flow control-plane UI (plan)
+# faraday-core dashboard — Datastar + Rocket Flow control-plane UI (plan)
 
 Status: **plan**. This is the design for a browser dashboard that manages the
-jolt control plane (jolt-plane) and the agent threads it drives. The server owns
+jolt control plane (faraday-core) and the agent threads it drives. The server owns
 all state; the browser is a thin hypermedia client. No JSON REST API, no SPA
 build step.
 
@@ -30,11 +30,11 @@ build step.
 
 | concern | library | read surface | write surface |
 |---|---|---|---|
-| gate | jolt-plane | `gate`, `decide`, `stats` | `new-plane`, `admit`, `release`, `close!` |
-| runner | jolt-plane | `run-sandbox!`, `run-all!` | `new-runner`, `close-runner!` |
-| tool server | jolt-rap | `invoke`, `subscribe`, `on-result` | `invoke`, `cancel`, `close`, `close!` |
-| warm VMs | jolt-vm-pool | `stats` `{:warm :total :snapshots}` | `acquire`, `release`, `hibernate`, `restore` |
-| threads | jolt-fanout + jolt-ledger | `history`, `last-seq` | `spawn`, `inherit`, `report`, `yield` |
+| gate | faraday-core | `gate`, `decide`, `stats` | `new-plane`, `admit`, `release`, `close!` |
+| runner | faraday-core | `run-sandbox!`, `run-all!` | `new-runner`, `close-runner!` |
+| tool server | faraday-rap | `invoke`, `subscribe`, `on-result` | `invoke`, `cancel`, `close`, `close!` |
+| warm VMs | faraday-pool | `stats` `{:warm :total :snapshots}` | `acquire`, `release`, `hibernate`, `restore` |
+| threads | faraday-fanout + faraday-ledger | `history`, `last-seq` | `spawn`, `inherit`, `report`, `yield` |
 | cache | jolt-memo | `stats` `{:entries :bytes}`, `get` | `put!`, `delete!` |
 | budget | jolt-admission | `stats` `{:budget :used :granted :waiting}` | `acquire!`, `release!` |
 | policy | jolt-cedar | `authorized?`, `validate` | validate before apply |
@@ -49,7 +49,7 @@ Browser (thin client — no build step)
         ▲  SSE: datastar-merge-fragments / merge-signals / remove-fragments
         │  (text/event-stream, one stream per tab)
         ▼  HTTP GET / POST (data-on:click → action endpoint, signals as form body)
-jolt-dashboard  (Clojure, jolt — new repo racklr-dev/jolt-dashboard)
+faraday-console  (Clojure, jolt — new repo racklr-dev/faraday-console)
   ├─ handler.clj : routes  /  /events  /actions/*  /assets
   ├─ board.clj   : one glimmer ratom of plane state, resampled every 250ms
   ├─ views/*.clj : Hiccup fragments per panel (cached components)
@@ -57,7 +57,7 @@ jolt-dashboard  (Clojure, jolt — new repo racklr-dev/jolt-dashboard)
         │  served by ring-chez-adapter (BSD sockets, :strategy :fibers)
         │  SSE + reactive diff/patch by glimmer-datastar (wrap-datastar)
         ▼
-  jolt-plane · jolt-rap · jolt-vm-pool · jolt-fanout+jolt-ledger ·
+  faraday-core · faraday-rap · faraday-pool · faraday-fanout+faraday-ledger ·
   jolt-memo · jolt-admission · jolt-cedar
 ```
 
@@ -211,8 +211,8 @@ fragment updates):
   server half — they meet at the SSE contract above.
 - **Auth**: operator console → bind 127.0.0.1 by default + optional bearer token;
   never a public endpoint, never unvalidated policy/budget apply.
-- **Repo**: new `racklr-dev/jolt-dashboard` (dashboard depends on plane, never
-  the reverse). The jolt-plane `serve` skeleton is replaced by this server.
+- **Repo**: new `racklr-dev/faraday-console` (dashboard depends on plane, never
+  the reverse). The faraday-core `serve` skeleton is replaced by this server.
 
 ## Out of scope (first cut)
 

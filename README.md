@@ -1,28 +1,28 @@
-# jolt-plane — control-plane daemon for the jolt plane
+# faraday-core — control-plane daemon for the jolt plane
 
 One concrete mechanism: the plane daemon that ties the two security seams
 into one gate. A sandbox run is authorized by the Cedar policy engine
 (jolt-cedar, jolt-contracts SPEC §6) and only then admitted under a resource
 budget (jolt-admission, SPEC §5). `gate` is that gate; `new-runner`/`run-sandbox!`
-wire that gate together with a warm VM pool (jolt-vm-pool) and a fanout runtime
-(jolt-fanout) into the N-sandbox execution loop; the CLI in
+wire that gate together with a warm VM pool (faraday-pool) and a fanout runtime
+(faraday-fanout) into the N-sandbox execution loop; the CLI in
 `src/jolt/plane/main.clj` boots it.
 
 Layers: `gate` (plane, depends on jolt-admission + jolt-cedar only) and the
-runner layer (depends additionally on jolt-vm-pool + jolt-fanout). The runner
+runner layer (depends additionally on faraday-pool + faraday-fanout). The runner
 layer (N sandboxes under budget with policy egress) and the RAP/MCP transport
 (nc-916C: a RAP server drives N tool invocations through the runner) are here.
 
 ## Architecture
 
 ```text
-RAP (jolt-rap)        Tool Invocations → exactly one terminal frame per call-id
+RAP (faraday-rap)        Tool Invocations → exactly one terminal frame per call-id
   │  :run-hook = plane/run-sandbox!
   ▼
 runner (plane)        new-runner / run-sandbox! / run-all!
   ├─ gate:    jolt-cedar (authorize) then jolt-admission (admit under budget)
-  ├─ fanout:  jolt-fanout + jolt-ledger     thread spawn/report tree
-  ├─ pool:    jolt-vm-pool + jolt-microvm   warm KVM sandboxes (libkrun)
+  ├─ fanout:  faraday-fanout + faraday-ledger     thread spawn/report tree
+  ├─ pool:    faraday-pool + jolt-microvm   warm KVM sandboxes (libkrun)
   └─ egress:  egress-id → Egress Contract   Cedar resource attrs
   ▲
   │ HTTP/SSE (planned)
@@ -33,13 +33,13 @@ dashboard             docs/dashboard.md — Datastar + Rocket Flow UI
 
 ```clojure
 ;; deps.edn
-{:deps {racklr-dev/jolt-plane
-        {:git/url "https://github.com/racklr-dev/jolt-plane"
+{:deps {racklr-dev/faraday-core
+        {:git/url "https://github.com/racklr-dev/faraday-core"
          :git/sha "<pinned sha>"}}}
 ```
 
 ```clojure
-(require '[jolt.plane :as plane])
+(require '[faraday.core :as plane])
 
 (def p (plane/new-plane
         {:budget {:cpu 4 :mem-mb 4096}
@@ -64,9 +64,9 @@ or escape the quotes.
 ### Runner layer (nc-FF99)
 
 ```clojure
-(require '[jolt.plane :as plane]
-         '[jolt.vm-pool :as pool]
-         '[jolt.fanout :as fanout])
+(require '[faraday.core :as plane]
+         '[faraday.pool :as pool]
+         '[faraday.fanout :as fanout])
 
 (def p (plane/new-plane {:budget {:cpu 2 :mem-mb 2048}
                          :policy-set {:policies [...] :schema {} :entities []}}))
@@ -99,7 +99,7 @@ reads resource attributes from the entities array, not the request.
 
 ### RAP transport (nc-916C)
 
-A RAP server (jolt-rap) can drive the runner via `:run-hook`: the server maps
+A RAP server (faraday-rap) can drive the runner via `:run-hook`: the server maps
 each Tool Invocation to a Sandbox Request and hands it to `run-sandbox!`,
 which owns gate/spawn/acquire/exec/release/report; the server then maps the
 result to a terminal RAP frame (`:denied` → error code `"denied"`, `:error` →
@@ -108,7 +108,7 @@ the error code, `:ok` + exit 0 → `"ok"`). The E2E test
 gate this way — 10/10 green.
 
 ```clojure
-(require '[jolt.plane :as plane] '[jolt.rap :as rap])
+(require '[faraday.core :as plane] '[faraday.rap :as rap])
 
 (def runner (plane/new-runner {...}))
 (def srv (rap/new-server {:fanout rt
@@ -136,7 +136,7 @@ jolt-cedar's native library is gitignored, so set `JOLT_CEDAR_LIB` to a built
 
 ```sh
 # no KVM: with-redefs microvm start!/stop!, injected exec-hook, real pool+ledger+fanout
-cd ~/projects/jolt/jolt-plane && JOLT_SKIP_MIN_VERSION=1 \
+cd ~/projects/jolt/faraday-core && JOLT_SKIP_MIN_VERSION=1 \
   JOLT_BIN=/tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt \
   JOLT_CEDAR_LIB=/home/jm/projects/jolt/jolt-cedar/native/target/release/libcedar_policy.so \
   /tmp/jolt-rel/jolt-v0.8.28-x86_64-linux/jolt run test/jolt/plane_wiring_test.clj
@@ -151,7 +151,7 @@ Scaffold (nc-2355): budget + policy wired end to end, CLI + smoke test green.
 Runner (nc-FF99): gate + vm-pool + fanout wired, 6 sandboxes under a cpu2
 budget with policy egress — 14/14 green. E2E (nc-916C): RAP server wired to
 the runner via :run-hook, 6 concurrent tool invocations driven through the
-gate — 10/10 green. Pushed to racklr-dev/jolt-plane (HEAD 2d302cf).
+gate — 10/10 green. Pushed to racklr-dev/faraday-core (HEAD 2d302cf).
 
 The `serve` CLI is still a skeleton; the browser dashboard that replaces it is
 planned in `docs/dashboard.md` (Datastar + Rocket Flow UI).

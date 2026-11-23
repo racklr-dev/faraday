@@ -1,5 +1,5 @@
-;; jolt-plane: control-plane daemon — budget + policy in one gate.
-(ns jolt.plane
+;; faraday-core: control-plane daemon — budget + policy in one gate.
+(ns faraday.core
   "Control-plane daemon for the jolt plane. One gate that authorizes a sandbox
   run with the Cedar policy engine (jolt.cedar, SPEC section 6) and only then
   admits it under a resource budget (jolt.admission, SPEC section 5).
@@ -10,18 +10,18 @@
   (:require [clojure.string :as str]
             [jolt.admission :as adm]
             [jolt.cedar :as cedar]
-            [jolt.vm-pool :as pool]
-            [jolt.fanout :as fanout]
+            [faraday.pool :as pool]
+            [faraday.fanout :as fanout]
             [jolt.microvm :as microvm]))
 
 (defrecord Plane [config admission authorizer policy-text entities closed])
 
 (defn- fail! [msg data]
-  (throw (ex-info msg (assoc data :jolt.plane/error true))))
+  (throw (ex-info msg (assoc data :faraday.core/error true))))
 
 (defn- check-open! [plane]
   (when (true? (some-> plane :closed deref))
-    (fail! "jolt.plane is closed" {:type :plane-closed}))
+    (fail! "faraday.core is closed" {:type :plane-closed}))
   plane)
 
 (defn new-plane

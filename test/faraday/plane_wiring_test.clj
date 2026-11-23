@@ -1,12 +1,12 @@
-;; jolt-plane wiring (nc-FF99): N sandboxes under budget with policy egress.
+;; faraday-core wiring (nc-FF99): N sandboxes under budget with policy egress.
 ;; No KVM: the VM boundary (start!/stop!) is faked via with-redefs and the
 ;; exec hook is injected, so this runs with plain jolt run.
-;; Run: cd jolt-plane && JOLT_CEDAR_LIB=<libcedar_policy.so> jolt run test/jolt/plane_wiring_test.clj
+;; Run: cd faraday-core && JOLT_CEDAR_LIB=<libcedar_policy.so> jolt run test/jolt/plane_wiring_test.clj
 (ns jolt.test.plane-wiring
-  (:require [jolt.plane :as plane]
-            [jolt.vm-pool :as pool]
-            [jolt.fanout :as fanout]
-            [jolt.ledger :as ledger]
+  (:require [faraday.core :as plane]
+            [faraday.pool :as pool]
+            [faraday.fanout :as fanout]
+            [faraday.ledger :as ledger]
             [jolt.microvm :as microvm]))
 
 (def failures (atom 0))
@@ -52,7 +52,7 @@
          overrides))
 
 (defn with-wiring [f]
-  (let [root (str "/tmp/jolt-plane-wiring-" (System/nanoTime))
+  (let [root (str "/tmp/faraday-core-wiring-" (System/nanoTime))
         db (ledger/new-ledger {:path (str root "/ledger.db")})
         rt (fanout/new-runtime {:ledger db})
         p (pool/new-pool {:image image
@@ -130,6 +130,6 @@
         (finally (plane/close! plane))))))
 
 (if (zero? @failures)
-  (println "jolt-plane wiring: all green")
+  (println "faraday-core wiring: all green")
   (do (println (str @failures " FAILURES"))
       (System/exit 1)))

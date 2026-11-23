@@ -1,16 +1,16 @@
-;; jolt-plane E2E (nc-916C): a harness drives N sandboxes over RAP through
+;; faraday-core E2E (nc-916C): a harness drives N sandboxes over RAP through
 ;; the plane gate. No KVM: the VM boundary (start!/stop!) is faked via
 ;; with-redefs and the exec hook is injected into the runner, so each RAP
 ;; invoke runs the full gate -> spawn -> acquire -> exec -> release -> report
 ;; path and delivers one terminal result frame.
-;; Run: cd jolt-plane && JOLT_CEDAR_LIB=<libcedar_policy.so> jolt run test/jolt/plane_e2e_test.clj
+;; Run: cd faraday-core && JOLT_CEDAR_LIB=<libcedar_policy.so> jolt run test/jolt/plane_e2e_test.clj
 (ns jolt.test.plane-e2e
-  (:require [jolt.plane :as plane]
-            [jolt.vm-pool :as pool]
-            [jolt.fanout :as fanout]
-            [jolt.ledger :as ledger]
+  (:require [faraday.core :as plane]
+            [faraday.pool :as pool]
+            [faraday.fanout :as fanout]
+            [faraday.ledger :as ledger]
             [jolt.microvm :as microvm]
-            [jolt.rap :as rap]))
+            [faraday.rap :as rap]))
 
 (def failures (atom 0))
 (defn check [label expected got]
@@ -47,7 +47,7 @@
 (defn tool-call
   "A RAP Tool Invocation (SPEC section 3). args is the tool arguments map;
   :argv is required and Sandbox Request fields (:image :cpu :mem-mb :egress)
-  pass through to the plane runner via jolt.rap's call->request."
+  pass through to the plane runner via faraday.rap's call->request."
   [i & [args]]
   {:v 1 :call-id (str "call_" i) :thread-id (str "thr_" i) :name "run_shell"
    :args (merge {:argv ["/bin/echo" (str "sandbox-" i)]
@@ -63,7 +63,7 @@
     @p))
 
 (defn with-e2e [f]
-  (let [root (str "/tmp/jolt-plane-e2e-" (System/nanoTime))
+  (let [root (str "/tmp/faraday-core-e2e-" (System/nanoTime))
         db (ledger/new-ledger {:path (str root "/ledger.db")})
         rt (fanout/new-runtime {:ledger db})
         p (pool/new-pool {:image image
@@ -147,6 +147,6 @@
         (finally (plane/close! plane))))))
 
 (if (zero? @failures)
-  (println "jolt-plane e2e (RAP through the gate): all green")
+  (println "faraday-core e2e (RAP through the gate): all green")
   (do (println (str @failures " FAILURES"))
       (System/exit 1)))

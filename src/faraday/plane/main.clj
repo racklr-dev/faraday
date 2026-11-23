@@ -1,8 +1,8 @@
-;; jolt-plane CLI: boot the plane and run one gate.
+;; faraday-core CLI: boot the plane and run one gate.
 ;; Usage: jolt run src/jolt/plane/main.clj [plan|check|serve] --config PATH [--request PATH]
-(ns jolt.plane.main
+(ns faraday.core.main
   (:require [clojure.data.json :as json]
-            [jolt.plane :as plane]))
+            [faraday.core :as plane]))
 
 (defn- fail! [msg]
   (println (str "error: " msg))
