@@ -1,0 +1,9 @@
+{:paths ["src"]
+
+ :deps {racklr-dev/jolt-microvm
+        {:git/url "https://github.com/racklr-dev/jolt-microvm"
+         :git/sha "80a384134ea7cdbd620527bf0fb4112bd1b9f57b"}
+
+        racklr-dev/jolt-oci
+        {:git/url "https://github.com/racklr-dev/jolt-oci"
+         :git/sha "9e4afdf314c0870e8d67b5adb55a31643d5c59b3"}}}
