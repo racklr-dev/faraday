@@ -84,10 +84,34 @@
       "script" (agent/scripted-agent (:script spec))
       (fail! (str "unknown agent kind: " (pr-str kind)) {:agent spec}))))
 
+(defn goal-fn
+  "Interpret a declarative :goal spec (data) as a predicate over ctx. spec is
+  a map {:path [..] :pred :>=|:>|:<=|:<|:=|:present|:absent :value v}; :path
+  is a get-in path into ctx (a bare non-vector path reads one key), :pred
+  defaults to :=. A nil spec -> nil (no goal). This is how a loop manifest
+  carries a stop-condition without carrying code."
+  [spec]
+  (when (map? spec)
+    (let [path (:path spec)
+          pred (or (:pred spec) :=)
+          value (:value spec)]
+      (fn [ctx]
+        (let [v (if (vector? path) (get-in ctx path) (get ctx path))]
+          (case pred
+            :>= (>= (or v 0) value)
+            :>  (> (or v 0) value)
+            :<= (<= v value)
+            :<  (< v value)
+            :=  (= v value)
+            :present (some? v)
+            :absent (nil? v)
+            false))))))
+
 (defn run-manifest!
   "Drive one run of the loop the manifest describes over a faraday-rap server.
   opts: :rap (server handle, required) and :manifest, or :memo + :key to load
-  it. :task/:thread-id/:max-turns/:timeout-ms/:goal override the manifest.
+  it. :task/:thread-id/:max-turns/:timeout-ms override the manifest; :goal (a
+  predicate fn) overrides the manifest's declarative :goal spec.
   Returns the run! outcome."
   [opts]
   (let [srv (:rap opts)
@@ -95,9 +119,11 @@
               (load-manifest (:memo opts) (:key opts)))]
     (when-not srv (fail! "run-manifest! requires a :rap server" {:opts opts}))
     (when-not m (fail! "run-manifest! requires :manifest or (:memo + :key)" {:opts opts}))
-    (let [base (select-keys m [:task :thread-id :max-turns :timeout-ms :goal])
-          over (non-nil (select-keys opts [:task :thread-id :max-turns :timeout-ms :goal]))]
-      (agent/run! (assoc (merge base over) :rap srv :agent (manifest-agent m))))))
+    (let [base (select-keys m [:task :thread-id :max-turns :timeout-ms])
+          over (non-nil (select-keys opts [:task :thread-id :max-turns :timeout-ms]))
+          goal (or (:goal opts) (goal-fn (:goal m)))]
+      (agent/run! (cond-> (assoc (merge base over) :rap srv :agent (manifest-agent m))
+                    goal (assoc :goal goal))))))
 
 ;; -- the agent rewrites the loop as data --------------------------------------
 

@@ -156,4 +156,55 @@
     (check "results in order" ["a" "b" "c"] (map :result outs))
     (check "three execs across agents" 3 (count @exec-cmds))))
 
+;; -- :goal stop-condition stops the loop the moment it passes ---------------
+(with-fakes
+  (reset-fakes!)
+  (let [srv (new-srv)
+        a (agent/scripted-agent
+           [{:tool-call {:name "run_shell" :args {:argv ["echo" "a"]}}}
+            {:tool-call {:name "run_shell" :args {:argv ["echo" "b"]}}}
+            {:tool-call {:name "run_shell" :args {:argv ["echo" "c"]}}}
+            {:done "never"}])
+        out (agent/run! {:rap srv :agent a :thread-id "thr_goal"
+                         :goal #(>= (:turns %) 2)})]
+    (check "goal stops status" :done (:status out))
+    (check "goal stop-reason" :goal (:stop-reason out))
+    (check "goal met true" true (:met out))
+    (check "goal stopped after 2 turns" 2 (:turns out))
+    (check "goal ran 2 execs" 2 (count @exec-cmds))))
+
+;; -- :goal unmet when the agent finishes first -------------------------------
+(with-fakes
+  (reset-fakes!)
+  (let [srv (new-srv)
+        a (agent/scripted-agent [{:done "early"}])
+        out (agent/run! {:rap srv :agent a :thread-id "thr_goal2"
+                         :goal #(>= (:turns %) 5)})]
+    (check "agent done status" :done (:status out))
+    (check "agent done stop-reason" :agent (:stop-reason out))
+    (check "goal unmet when agent finished" false (:met out))
+    (check "no execs for unmet goal" 0 (count @exec-cmds))))
+
+;; -- :goal unmet on max-turns ------------------------------------------------
+(with-fakes
+  (reset-fakes!)
+  (let [srv (new-srv)
+        a (agent/scripted-agent
+           [{:tool-call {:name "run_shell" :args {:argv ["echo" "x"]}}}
+            {:tool-call {:name "run_shell" :args {:argv ["echo" "y"]}}}
+            {:tool-call {:name "run_shell" :args {:argv ["echo" "z"]}}}])
+        out (agent/run! {:rap srv :agent a :thread-id "thr_goal3" :max-turns 1
+                         :goal #(>= (:turns %) 99)})]
+    (check "max-turns with unmet goal" :max-turns (:status out))
+    (check "max-turns goal unmet" false (:met out))))
+
+;; -- invalid :goal rejected --------------------------------------------------
+(with-fakes
+  (reset-fakes!)
+  (let [srv (new-srv)
+        a (agent/scripted-agent [{:done "x"}])
+        err (try (agent/run! {:rap srv :agent a :goal "not-a-fn"}) ::no-throw
+                 (catch Exception e (ex-message e)))]
+    (check "invalid goal throws" "run! :goal must be a predicate fn of ctx" err)))
+
 (println "ALL AGENT TESTS PASSED")

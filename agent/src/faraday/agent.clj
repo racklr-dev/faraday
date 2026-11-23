@@ -112,16 +112,23 @@
     :thread-id optional owning thread id (default a fresh thr_)
     :max-turns cap on tool-calls executed (default 32)
     :timeout-ms per-invocation terminal wait (default 120000)
+    :goal      optional predicate (fn [ctx] -> truthy): when it passes, the
+               loop stops at once with {:status :done :met true :stop-reason
+               :goal}. A command goal is the same shape — a predicate that
+               runs the command and returns whether it passed.
     :on-frame  fn called with every frame delivered by rap
     :on-step   fn called with each transcript entry as it is appended
 
   Returns {:status :done|:max-turns|:error :result .. :transcript .. :turns n
-            :frames ..}."
+            :frames .. :met true|false (present only when :goal was given)}."
   [opts]
   (let [srv (:rap opts)
-        f (:agent opts)]
+        f (:agent opts)
+        goal (:goal opts)]
     (when-not srv (fail! "run! requires a :rap server" {:opts opts}))
     (when-not (ifn? f) (fail! "run! requires an :agent step fn" {:opts opts}))
+    (when (and goal (not (ifn? goal)))
+      (fail! "run! :goal must be a predicate fn of ctx" {:goal goal}))
     (let [thread-id (or (:thread-id opts) (new-thread-id))
           max-turns (or (:max-turns opts) 32)
           timeout-ms (or (:timeout-ms opts) 120000)
@@ -133,41 +140,47 @@
                   :transcript [{:role :user :content (:task opts)}]
                   :turns 0}
                  {:transcript [] :turns 0})
-          ctx (atom ctx0)]
+          ctx (atom ctx0)
+          out (fn [status m turns]
+                (merge {:status status
+                        :transcript (:transcript @ctx)
+                        :turns turns
+                        :frames @frames}
+                       m
+                       (when (and goal (not (contains? m :met))) {:met false})))]
       (loop []
-        (let [{:keys [turns]} @ctx
-              action (try (f @ctx) (catch Exception e {:step-error e}))]
-          (cond
-            ;; agent finished
-            (contains? action :done)
-            (let [entry {:role :assistant :content (:done action)}]
-              (swap! ctx append-entry! entry on-step)
-              {:status :done :result (:done action)
-               :transcript (:transcript @ctx) :turns turns :frames @frames})
+        (if (and goal (goal @ctx))
+          (out :done {:stop-reason :goal :result {:goal-met true} :met true} (:turns @ctx))
+          (let [{:keys [turns]} @ctx
+                action (try (f @ctx) (catch Exception e {:step-error e}))]
+            (cond
+              ;; agent finished
+              (contains? action :done)
+              (let [entry {:role :assistant :content (:done action)}]
+                (swap! ctx append-entry! entry on-step)
+                (out :done {:stop-reason :agent :result (:done action)} turns))
 
-            ;; agent wants one more tool invocation
-            (contains? action :tool-call)
-            (if (>= turns max-turns)
-              {:status :max-turns :transcript (:transcript @ctx) :turns turns :frames @frames}
-              (let [call (:tool-call action)
-                    call-entry {:role :tool-call :name (:name call) :args (:args call)
-                                :display-as (:display-as call)}
-                    r (invoke! srv thread-id call timeout-ms on-frame frames)
-                    res-entry (result-entry call r)]
-                (swap! ctx append-entry! call-entry on-step)
-                (swap! ctx append-entry! res-entry on-step)
-                (swap! ctx update :turns inc)
-                (recur)))
+              ;; agent wants one more tool invocation
+              (contains? action :tool-call)
+              (if (>= turns max-turns)
+                (out :max-turns {} turns)
+                (let [call (:tool-call action)
+                      call-entry {:role :tool-call :name (:name call) :args (:args call)
+                                  :display-as (:display-as call)}
+                      r (invoke! srv thread-id call timeout-ms on-frame frames)
+                      res-entry (result-entry call r)]
+                  (swap! ctx append-entry! call-entry on-step)
+                  (swap! ctx append-entry! res-entry on-step)
+                  (swap! ctx update :turns inc)
+                  (recur)))
 
-            ;; step threw
-            (contains? action :step-error)
-            {:status :error :error (or (ex-message (:step-error action)) "step failed")
-             :transcript (:transcript @ctx) :turns turns :frames @frames}
+              ;; step threw
+              (contains? action :step-error)
+              (out :error {:error (or (ex-message (:step-error action)) "step failed")} turns)
 
-            ;; invalid action shape
-            :else
-            {:status :error :error (str "agent step returned an invalid action: " (pr-str action))
-             :transcript (:transcript @ctx) :turns turns :frames @frames}))))))
+              ;; invalid action shape
+              :else
+              (out :error {:error (str "agent step returned an invalid action: " (pr-str action))} turns))))))))
 
 (defn run-all!
   "Run N agent tasks concurrently, one agent per sandbox exec stream, over the

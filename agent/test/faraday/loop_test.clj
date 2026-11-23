@@ -190,4 +190,16 @@
     (check "no soak ran on reject" 0 (count @exec-cmds))
     (check "ledger pointer untouched" nil (ldg/pointer l "loop/active"))))
 
+;; -- run-manifest! honors the manifest's declarative :goal ------------------
+(with-fakes
+  (reset-fakes!)
+  (let [srv (new-srv)
+        manifest (assoc (mk-manifest "ok")
+                        :goal {:path [:turns] :pred :>= :value 1})
+        out (loop/run-manifest! {:rap srv :manifest manifest :thread-id "thr_goal"})]
+    (check "data goal stops status" :done (:status out))
+    (check "data goal stop-reason" :goal (:stop-reason out))
+    (check "data goal met" true (:met out))
+    (check "data goal one exec" 1 (count @exec-cmds))))
+
 (println "ALL LOOP-AS-DATA TESTS PASSED")
