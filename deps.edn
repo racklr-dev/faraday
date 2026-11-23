@@ -2,4 +2,4 @@
 
  :deps {racklr-dev/faraday-ledger
         {:git/url "https://github.com/racklr-dev/faraday-ledger"
-         :git/sha "fa471a741c87502fd30bcb7e8ca0f3eb847caeb1"}}}
+         :git/sha "ca686e74bb5ee04dcc540930391516efd4436aae"}}}

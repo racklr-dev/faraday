@@ -1,7 +1,7 @@
 # faraday-fanout — task fanout runtime
 
 One concrete mechanism: the task fanout runtime for the jolt control plane.
-It emits Thread Messages (jolt-contracts SPEC.md §1) into a faraday-ledger, with
+It emits Thread Messages (faraday-contracts SPEC.md §1) into a faraday-ledger, with
 an optional cedar policy hook that can veto an emit before it is appended.
 
 ## Use

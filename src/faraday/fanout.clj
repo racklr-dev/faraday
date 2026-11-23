@@ -1,5 +1,5 @@
 ;; faraday-fanout: task fanout runtime.
-;; A runtime shapes Thread Messages (jolt-contracts SPEC.md §1) and appends
+;; A runtime shapes Thread Messages (faraday-contracts SPEC.md §1) and appends
 ;; them to a faraday-ledger, with an optional policy hook that can veto an emit
 ;; before it is appended. spawn/inherit mint a NEW thread (new thread-id) whose
 ;; parent-id links it into the tree; report/yield append into an existing
@@ -7,7 +7,7 @@
 (ns faraday.fanout
   "Task fanout runtime for the jolt control plane.
 
-  A runtime emits Thread Messages (jolt-contracts SPEC.md §1) into a
+  A runtime emits Thread Messages (faraday-contracts SPEC.md §1) into a
   faraday-ledger, with an optional cedar policy hook that can veto an emit
   before it is appended. Emitted messages carry the standard kinds: spawn,
   inherit, report, yield, user-input, system."
@@ -52,7 +52,7 @@
 
 (defn new-runtime
   "Open a fanout runtime over opts, a map with :ledger (faraday-ledger handle)
-  and optionally :memo (jolt-memo handle) and :policy-hook (fn msg -> truthy
+  and optionally :memo (faraday-memo handle) and :policy-hook (fn msg -> truthy
   to permit, nil = always permit). Returns an opaque runtime handle."
   [opts]
   (let [l (:ledger opts)]
