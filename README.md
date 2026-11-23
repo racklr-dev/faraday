@@ -19,6 +19,7 @@ pinned git dependencies.
 | `core/` | faraday.core | the plane: budget admission + Cedar authorization + sandbox runs |
 | `pool/` | faraday.pool | warm VM pool over jolt-microvm + jolt-oci |
 | `rap/` | faraday.rap | tool invocation server (requests → runs) |
+| `agent/` | faraday.agent | the agent framework: drives an agent's tool-calling loop over rap |
 | `fanout/` | faraday.fanout | thread-message fanout over the ledger |
 | `ledger/` | faraday.ledger | single writer, append-only thread ledger |
 | `memo/` | faraday.memo | content-addressed message memoization |
