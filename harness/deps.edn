@@ -7,8 +7,9 @@
         {:git/url "https://github.com/jolt-lang/db"
          :git/sha "b016f792d3b1856899686466ffb7fa00f686ed7a"}
 
-        jolt-lang/glimmer-tui
-        {:local/root "../../glimmer-tui"}
+        racklr-dev/glimmer-tui
+        {:git/url "https://github.com/racklr-dev/glimmer-tui"
+         :git/sha "bd118c563f975b8f154e20bfe628c0d016e8f311"}
 
         racklr-dev/faraday-agent
         {:local/root "../agent"}
