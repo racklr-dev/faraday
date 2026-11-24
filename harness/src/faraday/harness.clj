@@ -250,6 +250,29 @@
       (do (.destroyForcibly p)
           {:exit nil :out (deref reader 2000 "") :timeout? true}))))
 
+(defn run-command-interruptible
+  "Like run-command, but polls `interrupt` (an atom) every `poll-ms` while the
+  process runs; when it turns truthy the process is killed and the result is
+  {:exit nil :out partial :timeout? false :interrupted? true}."
+  [argv timeout-ms interrupt & {:keys [poll-ms] :or {poll-ms 50}}]
+  (let [pb (doto (ProcessBuilder. ^java.util.List (java.util.ArrayList. (map str argv)))
+             (.redirectErrorStream true))
+        p (.start pb)
+        reader (future (slurp (.getInputStream p)))]
+    (loop [deadline (+ (System/currentTimeMillis) timeout-ms)]
+      (if (.waitFor p poll-ms java.util.concurrent.TimeUnit/MILLISECONDS)
+        {:exit (.exitValue p) :out (deref reader 8000 "") :timeout? false :interrupted? false}
+        (cond
+          (and interrupt @interrupt)
+          (do (.destroyForcibly p)
+              {:exit nil :out (deref reader 1000 "") :timeout? false :interrupted? true})
+
+          (> (System/currentTimeMillis) deadline)
+          (do (.destroyForcibly p)
+              {:exit nil :out (deref reader 2000 "") :timeout? true :interrupted? false})
+
+          :else (recur deadline))))))
+
 ;; -- hooks -------------------------------------------------------------------
 
 (defn- valid-fixture?

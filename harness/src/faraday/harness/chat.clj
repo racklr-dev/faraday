@@ -253,6 +253,10 @@
       (when (map? a) a))
     (catch Exception _ nil)))
 
+(def ^:dynamic *interrupt*
+  "Bound by chat-session around run-turn! on the worker thread; tool executors
+  poll it to stop a running command mid-flight." nil)
+
 (defn host-exec
   "The default tool executor: run argv on the host in faraday's cwd, or evaluate
   a run_<lang> tool's :code via a scratch file. Returns
@@ -271,9 +275,17 @@
       {:status :error :error (str "unknown tool " (pr-str name))}
 
       :else
-      (let [r (h/run-command argv 120000)]
-        (if (or (:timeout? r) (nil? (:exit r)))
+      (let [r (if *interrupt*
+                (h/run-command-interruptible argv 120000 *interrupt*)
+                (h/run-command argv 120000))]
+        (cond
+          (:interrupted? r)
+          {:status :error :error "interrupted" :interrupted? true :stdout (:out r)}
+
+          (or (:timeout? r) (nil? (:exit r)))
           {:status :error :error "timed out" :stdout (:out r)}
+
+          :else
           {:status (if (zero? (:exit r)) :ok :error)
            :exit (:exit r)
            :stdout (:out r)
@@ -384,11 +396,13 @@
                    {:status :error :error "tool args must be {:argv [..]}, or {:code \"...\"} for a run_* tool"}
                    (try
                      (let [p (ensure-pool!)
-                           r (sb-pool-exec p (argv->cmd argv) :timeout-ms 120000 :cwd workspace)]
-                       {:status (if (zero? (:exit r)) :ok :error)
-                        :exit (:exit r)
-                        :stdout (:stdout r)
-                        :stderr (:stderr r)})
+                           r (sb-pool-exec p (argv->cmd argv) :timeout-ms 120000 :cwd workspace :interrupt *interrupt*)]
+                       (if (:interrupted? r)
+                         {:status :error :error "interrupted" :interrupted? true}
+                         {:status (if (zero? (:exit r)) :ok :error)
+                          :exit (:exit r)
+                          :stdout (:stdout r)
+                          :stderr (:stderr r)}))
                      (catch Exception e
                        (let [msg (str "sandbox exec failed (" (or (ex-message e) "?") ")")
                              boot? (nil? (:pool @state))]
@@ -467,7 +481,7 @@
   Safe to run on a worker thread (only ratom swaps, no widget touches)."
   [opts state entries]
   (let [{:keys [call exec system max-turns max-stall]} opts
-        interrupt (or (:interrupt opts) (atom false))
+        interrupt (or *interrupt* (:interrupt opts) (atom false))
         max-stall (or max-stall 3)
         run-one (fn [name args]
                   (let [res (exec name args)
@@ -481,6 +495,7 @@
                       :text (or (:stdout res) (:stderr res) "")
                       :error (:error res)
                       :fatal? (true? (:fatal? res))
+                      :interrupted? (true? (:interrupted? res))
                       :progress? progress?}]))
         step! (fn [es]
                 (let [resp (call (build-messages system es))
@@ -494,11 +509,13 @@
                     ;; DSML): execute each, feed results back, loop
                     (seq tcs)
                     (let [entries (vec (mapcat (fn [tc] (run-one (:name tc) (:args tc))) tcs))
-                          fatal (some (fn [e] (when (:fatal? e) (or (:error e) "fatal tool error"))) entries)]
+                          fatal (some (fn [e] (when (:fatal? e) (or (:error e) "fatal tool error"))) entries)
+                          interrupted (boolean (some :interrupted? entries))]
                       (swap! state update :messages into entries)
                       {:cont (into es entries)
                        :progress? (boolean (some :progress? entries))
-                       :fatal fatal})
+                       :fatal fatal
+                       :interrupted interrupted})
 
                     ;; done: render the answer and stop
                     (and action (:done action))
@@ -541,9 +558,13 @@
               ;; the fatal error, not a bare :error with no answer.
               (swap! state update :messages conj {:role :assistant :text msg})
               (swap! state assoc :busy? false :error msg))
-            (:cont outcome)  (recur (dec left)
-                                    (if (:progress? outcome) 0 (inc stall))
-                                    (:cont outcome))
+            (:cont outcome)
+            (if (:interrupted outcome)
+              (do (swap! state update :messages conj {:role :assistant :text "Stopped."})
+                  (swap! state assoc :busy? false :error nil))
+              (recur (dec left)
+                     (if (:progress? outcome) 0 (inc stall))
+                     (:cont outcome)))
             :else            (swap! state assoc :busy? false)))))))
 
 ;; -- the UI -------------------------------------------------------------------
@@ -669,10 +690,11 @@
                       (reset! interrupt false)
                       (swap! state assoc :busy? true :error nil :messages es)
                       (future
-                        (run-turn! {:call call :exec exec :system system
-                                    :max-turns max-turns :max-stall max-stall
-                                    :interrupt interrupt}
-                                   state es)
+                        (binding [*interrupt* interrupt]
+                          (run-turn! {:call call :exec exec :system system
+                                      :max-turns max-turns :max-stall max-stall
+                                      :interrupt interrupt}
+                                     state es))
                         (when (and stores thread-id)
                           (try (session/persist! stores thread-id (:messages @state))
                                (catch Exception _ nil))))))))]

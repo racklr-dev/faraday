@@ -51,5 +51,15 @@
   (check "interrupt appends a Stopped note" "Stopped." (-> @state :messages last :text))
   (check "interrupt clears busy" false (:busy? @state)))
 
+(let [calls (atom 0)
+      state (r/atom {:messages []})
+      opts {:call (fn [_] (swap! calls inc) "{:tool-call {:name \"run_shell\" :args {:argv [\"sleep\" \"99\"]}}}")
+            :exec (fn [_ _] {:status :error :error "interrupted" :interrupted? true})
+            :system "S" :max-turns 4}]
+  (chat/run-turn! opts state [{:role :user :text "x"}])
+  (check "interrupted tool stops the turn" "Stopped." (-> @state :messages last :text))
+  (check "interrupted tool makes one model call" 1 @calls)
+  (check "interrupted tool clears busy" false (:busy? @state)))
+
 (println "ALL STALL TESTS PASSED")
 (shutdown-agents)

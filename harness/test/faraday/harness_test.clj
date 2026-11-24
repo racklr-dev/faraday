@@ -174,4 +174,13 @@
   (check-true "advisory failure is still green" (:green? out))
   (check "verdict recorded as fail" ["fail"] (mapcat :verdict (:verdicts out))))
 
+(let [interrupt (atom false)
+      start (System/currentTimeMillis)
+      fut (future (h/run-command-interruptible ["sleep" "5"] 30000 interrupt))
+      _ (Thread/sleep 150)
+      _ (reset! interrupt true)
+      r (deref fut 5000 :no-result)]
+  (check-true "interruptible command stops early" (:interrupted? r))
+  (check-true "interruptible command returns fast" (< (- (System/currentTimeMillis) start) 5000)))
+
 (println "ALL HARNESS TESTS PASSED")
