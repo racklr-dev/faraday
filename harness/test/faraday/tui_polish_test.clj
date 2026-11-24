@@ -32,6 +32,45 @@
   (check-true "assistant entry emits a code segment" (some? code))
   (check "code segment hard-wraps verbatim" ["(defn x [] 1)"] (:lines code)))
 
+(let [es (chat/entry-segments {:role :assistant :text "- alpha beta gamma delta"} 10)
+      line-kinds (mapv :kind (filter #(= :line (:t %)) es))]
+  (check "wrapped bullet keeps one marker" :bullet (first line-kinds))
+  (check "wrapped bullet continuations are not bullets"
+         [] (remove #{:bullet-cont} (rest line-kinds)))
+  (check "wrapped bullet spans more than one line" true (> (count line-kinds) 1)))
+(check "bullet continuation indents under the marker"
+       "    " (#'chat/line-prefix :assistant :bullet-cont))
+
+(let [segs (chat/markdown-segments "**bold** and `code` and ~~gone~~")
+      s (:spans (first segs))]
+  (check-true "markdown carries inline spans" (boolean (seq s)))
+  (check-true "markdown marks strong" (boolean (some #(contains? (:style %) :strong) s)))
+  (check-true "markdown marks code" (boolean (some #(contains? (:style %) :code) s)))
+  (check-true "markdown marks strike" (boolean (some #(contains? (:style %) :strike) s))))
+
+(let [h (chat/segment-hiccup chat/palette
+                             {:t :line :role :assistant :kind :text
+                              :text "bold"
+                              :spans [{:text "bold" :style #{:strong}}]})]
+  (check "strong span renders bold"
+         {:color "#ebeef4" :bold true :label "bold"}
+         (second h)))
+
+(let [h (chat/segment-hiccup chat/palette
+                             {:t :line :role :assistant :kind :text
+                              :text "docs"
+                              :spans [{:text "docs" :style #{:link} :href "https://x"}]})]
+  (check "link span renders accent + underline"
+         {:color "#f6c075" :underline true :label "docs"}
+         (second h)))
+
+(let [h (chat/segment-hiccup chat/palette
+                             {:t :line :role :assistant :kind :text
+                              :text "run bb"
+                              :spans [{:text "run " :style nil}
+                                      {:text "bb" :style #{:code}}]})]
+  (check-true "multi-span line renders an hbox" (= :hbox (first h))))
+
 (let [h (chat/segment-hiccup chat/palette {:t :code :lines ["(defn x [] 1)"]})]
   (check "code renders as a slab box" :box (first h))
   (check "slab uses the nodecode slab colour" "#1b2125" (get-in h [1 :bg])))

@@ -22,7 +22,8 @@
             [glimmer-tui.core :as tui]
             [glimmer-tui.keys :as k]
             [glimmer-tui.widget :as w]
-            [jolt.host]))
+            [jolt.host]
+            [jolt.markdown.core :as md]))
 
 ;; -- the design language ------------------------------------------------------
 ;; faraday's terminal surfaces borrow nodecode's Tungstene palette and chrome:
@@ -76,17 +77,19 @@
         (recur (subs rem w) (conj acc (subs rem 0 w)))))))
 
 (def agentic-system
-  (str "You are faraday, a direct terminal assistant that gets real work done with tools.\n"
-       "You have a sandboxed shell (run_shell) plus taskboard, scope and hook tools.\n"
-       "Available tools (call one by replying with exactly one EDN map and nothing else):\n"
+  (str "You are faraday, the terminal work agent for this project. The operator types a work order; you carry it out end-to-end with tools, then answer with what you did and what you verified.\n"
+       "\n"
+       "Tools (each reply is exactly one EDN map, nothing else):\n"
        (tools/tool-prompt)
-       "\n\nWork like a careful engineer:\n"
-       "- Read before you change; prefer one targeted command over several probes.\n"
-       "- A tool's result comes back to you; keep calling tools only while you still need information.\n"
-       "- The board/scope/hook tools work only when the working context says the taskboard is ready; otherwise use run_shell.\n"
+       "\n"
+       "Working rules:\n"
+       "- Treat the user message as the task. If it is terse or ambiguous, make the smallest reasonable assumption and start; ask a question only when the choice changes the work itself.\n"
+       "- Read before you change. Prefer one targeted command over several probes.\n"
+       "- In run_shell the project directory is mounted at its own host path, so the paths in Context work verbatim. Board/scope/hook tools only work when Context says the taskboard is ready.\n"
        "- Never repeat a failed command unchanged — adapt it.\n"
-       "- You have a small turn budget, so stop and answer as soon as you can.\n"
-       "When you have the answer, reply with exactly one EDN map: {:done \"your answer\"} (or plain text for a short answer)."))
+       "- Your turn budget is small: stop and answer as soon as you have the result.\n"
+       "\n"
+       "Answer with {:done \"...\"} (or plain text for a short answer). Report concretely: files changed or commands run, and what you verified. No preamble, no filler."))
 
 ;; -- working context ---------------------------------------------------------
 ;; Injected into the system prompt so the model spends its turn budget on the
@@ -94,16 +97,21 @@
 ;; builder stays pure so tests can pin it.
 
 (defn boot-context-lines
-  "Compact standing facts about faraday's surroundings, as system-prompt lines."
-  [{:keys [cwd proj-root board-ready? top-level git-branch]}]
+  "Compact standing facts about faraday's surroundings, as system-prompt lines.
+  Pure; setup-chat probes the facts so tests can pin the rendering."
+  [{:keys [cwd proj-root board-ready? project-desc git-summary recent-commits tasks]}]
   (cond-> []
-    cwd        (conj (str "Working directory: " cwd))
-    proj-root  (conj (str "Project root: " proj-root))
+    cwd (conj (if (and proj-root (= proj-root cwd))
+                (str "Working directory (project root): " cwd)
+                (str "Working directory: " cwd)))
+    (and proj-root (not= proj-root cwd)) (conj (str "Project root: " proj-root))
+    project-desc  (conj (str "Project: " project-desc))
     (some? board-ready?) (conj (if board-ready?
                                  "Taskboard: ready — board/scope/hook/pool tools work."
                                  "Taskboard: NOT initialized — board/scope/hook tools will error; use run_shell instead (or run `faraday init` first)."))
-    top-level  (conj (str "Top-level: " top-level))
-    git-branch (conj (str "Git branch: " git-branch))))
+    git-summary  (conj (str "Git: " git-summary))
+    recent-commits (conj (str "Recent commits: " recent-commits))
+    (seq tasks)  (conj (str "Open tasks:\n" (str/join "\n" (map #(str "  " %) tasks))))))
 
 (defn top-level-summary
   "First `limit` sorted names in `dir`, joined, for the working context."
@@ -117,6 +125,26 @@
               (when (> (count names) limit) " …"))))
      (catch Exception _ nil))))
 
+(defn readme-desc
+  "A one-line project descriptor: the first substantive non-heading line of the
+  repo's README, truncated; nil when there is none. Falls back in setup-chat to
+  top-level-summary when no README yields a line."
+  [dir]
+  (try
+    (when-let [f (some (fn [n] (let [f (java.io.File. dir n)]
+                                 (when (.isFile f) f)))
+                       ["README.md" "README" "README.rst" "README.org" "readme.md" "Readme.md"])]
+      (let [line (->> (str/split-lines (slurp f))
+                      (map str/trim)
+                      (remove str/blank?)
+                      (remove #(or (str/starts-with? % "#")
+                                   (str/starts-with? % "<!--")
+                                   (str/starts-with? % "==")
+                                   (str/starts-with? % "--")))
+                      first)]
+        (when line (subs line 0 (min 160 (count line))))))
+    (catch Exception _ nil)))
+
 (defn git-branch
   "The current branch of the git repo at `dir`, or nil when not a repo."
   [dir]
@@ -125,6 +153,44 @@
       (when (and (zero? (:exit r)) (seq (str/trim (:out r))))
         (str/trim (:out r))))
     (catch Exception _ nil)))
+
+(defn git-status
+  "Short working-tree summary: \"clean\" or \"dirty (N changed[, M staged][, K untracked])\"; nil when not a repo."
+  [dir]
+  (try
+    (let [r (h/run-command ["git" "-C" dir "status" "--porcelain"] 4000)]
+      (when (zero? (:exit r))
+        (let [lines (remove str/blank? (str/split-lines (:out r)))]
+          (if (empty? lines)
+            "clean"
+            (let [staged (count (filter #(contains? #{\M \A \D \R \C} (first %)) lines))
+                  untracked (count (filter #(str/starts-with? % "??") lines))
+                  changed (- (count lines) untracked)]
+              (str "dirty (" changed " changed"
+                   (when (pos? staged) (str ", " staged " staged"))
+                   (when (pos? untracked) (str ", " untracked " untracked"))
+                   ")"))))))
+    (catch Exception _ nil)))
+
+(defn recent-commits
+  "Last `n` commit subjects as one line \"abc123 subject | def456 ...\"; nil when not a repo."
+  ([dir] (recent-commits dir 4))
+  ([dir n]
+   (try
+     (let [r (h/run-command ["git" "-C" dir "log" (str "-" n) "--format=%h %s"] 4000)]
+       (when (zero? (:exit r))
+         (let [lines (remove str/blank? (str/split-lines (:out r)))]
+           (when (seq lines) (str/join " | " lines)))))
+     (catch Exception _ nil))))
+
+(defn git-summary
+  "One line \"<branch> · <status>\" (or just the status when detached); nil when not a repo."
+  [dir]
+  (when-let [status (git-status dir)]
+    (let [branch (git-branch dir)]
+      (if (and branch (not= branch "HEAD"))
+        (str branch " · " status)
+        status))))
 
 (defn format-tool-result
   "One line describing a finished tool run, then its output. Used both for the
@@ -255,7 +321,8 @@
 
 (defn sandbox-exec-factory
   "Build a stateful tool executor over jolt.sandbox: a warm alpine microVM with
-  the operator's cwd volume-mounted at /workspace. The pool boots lazily on the
+  the operator's cwd volume-mounted at its own absolute path (workspace-guest =
+  the host cwd, so host paths work inside). The pool boots lazily on the
   first tool call and is reused; (close) stops it. Returns {:exec (fn [name
   args] -> result) :close (fn [])}. Tool calls FAIL CLOSED: if the sandbox cannot
   boot, the call returns {:status :error :error ..} and every later call returns
@@ -508,44 +575,32 @@
     (max 24 (- (long cols) 8))))
 
 (defn markdown-segments
-  "Split assistant markdown into transcript segments: prose is
-  {:t :line :kind :text|:heading|:quote|:bullet :text ..}, a fenced block is
-  {:t :code :lines [..]} (verbatim, one line per element). Inline **bold** is
-  stripped here; inline code and links are left to a richer renderer later."
+  "Split assistant markdown into render segments via jolt-markdown. Prose
+  segments carry :spans (inline strong/em/strike/code/link) plus the plain
+  :text for previews and line counts; fenced code stays verbatim. Numbered
+  items render as plain text, keeping their number."
   [text]
-  (let [in-code (volatile! false)
-        buf (volatile! [])
-        flush! (fn []
-                 (let [ls (vec @buf)]
-                   (vreset! buf [])
-                   (when (seq ls) [{:t :code :lines ls}])))]
-    (vec
-     (concat
-      (mapcat
-       (fn [line]
-         (let [t (str/trim line)]
-           (cond
-             (str/starts-with? t "```")
-             (if @in-code
-               (do (vreset! in-code false) (flush!))
-               (do (vreset! in-code true) []))
-
-             @in-code
-             (do (vswap! buf conj line) [])
-
-             (str/starts-with? t "#")
-             [{:t :line :kind :heading :text (str/trim (str/replace t #"^#+" ""))}]
-
-             (str/starts-with? t "> ")
-             [{:t :line :kind :quote :text (str/trim (subs t 2))}]
-
-             (or (str/starts-with? t "- ") (str/starts-with? t "* "))
-             [{:t :line :kind :bullet :text (str/trim (subs t 2))}]
-
-             :else
-             [{:t :line :kind :text :text (str/replace line "**" "")}])))
-       (str/split-lines (str text)))
-      (when @in-code (flush!))))))
+  (mapv (fn [blk]
+          (case (:type blk)
+            :heading {:t :line :kind :heading
+                      :text (md/spans-text (:spans blk))
+                      :spans (:spans blk)}
+            :quote {:t :line :kind :quote
+                    :text (md/spans-text (:spans blk))
+                    :spans (:spans blk)}
+            :bullet {:t :line :kind :bullet
+                     :text (md/spans-text (:spans blk))
+                     :spans (:spans blk)}
+            :numbered (let [spans (into [{:text (str (:n blk) ". ") :style nil}]
+                                        (:spans blk))]
+                        {:t :line :kind :text
+                         :text (md/spans-text spans)
+                         :spans spans})
+            :text {:t :line :kind :text
+                   :text (md/spans-text (:spans blk))
+                   :spans (:spans blk)}
+            :code {:t :code :lines (:lines blk)}))
+        (md/parse-blocks (str text))))
 
 (defn- markdown-lines
   "The per-line view of markdown-segments: [[kind text] ...], a code block
@@ -599,8 +654,20 @@
        (case (:t seg)
          :code [{:t :code :role :assistant
                  :lines (vec (mapcat #(hard-wrap % wrap) (:lines seg)))}]
-         (map (fn [line] {:t :line :role :assistant :kind (:kind seg) :text line})
-              (word-wrap (:text seg) wrap))))
+         (let [lines (md/wrap-spans (:spans seg) wrap)
+               kind (:kind seg)]
+           (if (= :bullet kind)
+             (map-indexed
+              (fn [i line]
+                {:t :line :role :assistant
+                 :kind (if (zero? i) :bullet :bullet-cont)
+                 :text (md/spans-text line)
+                 :spans line})
+              lines)
+             (map (fn [line] {:t :line :role :assistant :kind kind
+                              :text (md/spans-text line)
+                              :spans line})
+                  lines)))))
      (markdown-segments (:text e)))
 
     :tool-call
@@ -654,8 +721,38 @@
                  :heading "▍ "
                  :quote "│ "
                  :bullet "  • "
+                 :bullet-cont "    "
                  "")
     ""))
+
+(defn- span-props
+  "Style props for one inline span: the line's own style by default, overlaid
+  with the span's emphasis. glimmer-tui has no italic or strikethrough, so em
+  renders underlined and strikethrough renders dim (the terminal conventions)."
+  [pal base {:keys [style]}]
+  (let [style (or style #{})]
+    (cond-> base
+      (:strong style) (assoc :bold true)
+      (:em style)     (assoc :underline true)
+      (:strike style) (assoc :dim true)
+      (:code style)   (assoc :color (:code pal))
+      (:link style)   (assoc :color (:accent pal) :underline true))))
+
+(defn- spans-hiccup
+  "A prose line as hiccup: an optional prefix label (bullet/heading/quote
+  marker) followed by one label per span, so inline styles render per-span."
+  [pal role kind prefix spans]
+  (let [base (line-style pal role kind)]
+    (if (and (empty? prefix) (= 1 (count spans)))
+      (let [s (first spans)]
+        [:label (assoc (span-props pal base s) :label (:text s))])
+      (into [:hbox {:spacing 0}]
+            (concat
+             (when (seq prefix)
+               [[:label (assoc base :label prefix)]])
+             (map (fn [s]
+                    [:label (assoc (span-props pal base s) :label (:text s))])
+                  spans))))))
 
 (defn segment-hiccup
   "One render segment as hiccup."
@@ -666,9 +763,11 @@
            (map (fn [line]
                   [:label {:label line :color (:code pal)}])
                 (:lines seg)))]
-    (let [{:keys [role kind text]} seg]
-      [:label (assoc (line-style pal role kind)
-                     :label (str (line-prefix role kind) text))])))
+    (let [{:keys [role kind text spans]} seg]
+      (if (and (= role :assistant) (seq spans))
+        (spans-hiccup pal role kind (line-prefix role kind) spans)
+        [:label (assoc (line-style pal role kind)
+                       :label (str (line-prefix role kind) text))]))))
 
 ;; -- folding -----------------------------------------------------------------
 ;; Tool results and long code blocks are the bulky, low-signal parts of a
@@ -722,8 +821,10 @@
 (defn- entry-hiccup
   "One conversation entry as hiccup: tool results, long code blocks and long
   assistant prose are all foldable (collapsed to a header; Enter/click opens).
-  `i` is the entry index — stable because messages only append."
-  [expanded wrap i e]
+  The latest assistant answer stays open so the operator reads it whole; only
+  earlier long answers fold. `i` is the entry index — stable because messages
+  only append."
+  [expanded wrap last-assistant? i e]
   (case (:role e)
     :tool-result
     (let [open? (contains? @expanded i)]
@@ -734,8 +835,8 @@
     :assistant
     (let [segs (entry-segments e wrap)
           prose-lines (count (remove #(= :code (:t %)) segs))]
-      (if (> prose-lines 8)
-        ;; a long answer collapses whole, so prose stays readable as a summary
+      (if (and (> prose-lines 8) (not last-assistant?))
+        ;; an older long answer collapses whole; the latest one stays open to read
         (let [k [i :assistant]
               open? (contains? @expanded k)]
           [:vbox {:spacing 0}
@@ -866,7 +967,8 @@
               (scroll-to-bottom!)
               ((:send! sess) text))))]
     (fn []
-      (let [{:keys [messages busy? error]} @state]
+      (let [{:keys [messages busy? error]} @state
+            last-assistant-idx (last (keep-indexed (fn [i e] (when (= :assistant (:role e)) i)) messages))]
         [:vbox {:spacing 0 :margin [0 1 0 1]
                 :on-key (fn [ev]
                           (when (k/match? ev "ctrl+y")
@@ -876,7 +978,7 @@
           (into [:vbox {:spacing 0 :padding [1 2 1 1]}]
                 (if (empty? messages)
                   [[:label {:label "Type a task; faraday runs tools and answers." :dim true}]]
-                  (map-indexed (fn [i e] (entry-hiccup expanded wrap i e)) messages)))]
+                  (map-indexed (fn [i e] (entry-hiccup expanded wrap (= i last-assistant-idx) i e)) messages)))]
          [:hbox {:spacing 2 :margin [1 0 0 0]}
           (if busy?
             [:spinner {:tick @tick :label "working" :color (:tool pal)}]
@@ -982,7 +1084,7 @@
                                          :packages (:apk-packages sandbox-cfg)
                                          :nix-flake (:nix-flake sandbox-cfg)}))
         sandbox-ctx (when sandbox
-                      (str "Tools run in a jolt-sandbox microVM (alpine); the workspace is mounted at /workspace"
+                      (str "Tools run in a jolt-sandbox microVM (alpine); the workspace is mounted at its own host path, so host paths work inside"
                            (when (:nix-flake sandbox-cfg)
                              (str "; the nix devShell " (:nix-flake sandbox-cfg) " is layered in (PATH + env vars)"))
                            (when (seq mounts)
@@ -990,17 +1092,29 @@
                                   (str/join ", " (map (fn [m] (str (:host m) " -> " (:guest m))) mounts))))))
         shell-exec (if sandbox (:exec sandbox) host-exec)
         hd (delay (try (tools/open proj-root) (catch Exception _ nil)))
-        board-ready? (boolean
-                      (let [db (java.io.File. (str proj-root "/.faraday/harness.db"))]
-                        (and (.isFile db)
-                             (try (h/project-by-root (tools/open proj-root) proj-root)
-                                  (catch Exception _ false)))))
+        board (when (and (.isFile (java.io.File. (str proj-root "/.faraday/harness.db")))
+                         @hd)
+                (try (h/project-by-root @hd proj-root) (catch Exception _ nil)))
+        board-ready? (boolean board)
+        active-tasks (when board
+                       (try
+                         (let [ts (h/task-list @hd (:id board))
+                               active (filter #(contains? #{"open" "in_progress" "blocked"} (:status %)) ts)]
+                           (not-empty
+                            (mapv (fn [t]
+                                    (let [title (str (:title t))]
+                                      (str (:id t) " [" (:priority t) "][" (:status t) "] "
+                                           (subs title 0 (min 80 (count title))))))
+                                  (take 8 active))))
+                         (catch Exception _ nil)))
         boot-context (boot-context-lines
                       {:cwd root
                        :proj-root proj-root
                        :board-ready? board-ready?
-                       :top-level (top-level-summary root)
-                       :git-branch (git-branch root)})
+                       :project-desc (or (readme-desc root) (top-level-summary root))
+                       :git-summary (git-summary root)
+                       :recent-commits (recent-commits root)
+                       :tasks active-tasks})
         pool-ref (atom nil)
         exec (fn [name args]
                (if (contains? #{"run_shell" "shell" "exec"} name)

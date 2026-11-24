@@ -4,7 +4,8 @@
 ;; tool call, its result, and the final answer, and the draft clears.
 ;; Run: cd harness && jolt run test/faraday/chat_test.clj
 (ns jolt.test.chat
-  (:require [faraday.harness.chat :as chat]
+  (:require [faraday.harness :as h]
+            [faraday.harness.chat :as chat]
             [clojure.string :as str]
             [glimmer.core :as ui]
             [glimmer-tui.core :as tui]
@@ -65,7 +66,14 @@
 (let [md #'chat/markdown-lines]
   (check "md: heading" [:heading "Title"] (first (md "# Title")))
   (check "md: code fence" [:code "x"] (first (md "```\nx\n```")))
-  (check "md: bold stripped" [:text "hello world"] (first (md "**hello** world"))))
+  (check "md: bold stripped" [:text "hello world"] (first (md "**hello** world")))
+  (check "md: inline code stripped" [:text "run bb"] (first (md "run `bb`")))
+  (check "md: link collapses to label" [:text "docs"] (first (md "[docs](https://x)")))
+  (check "md: plus bullet" [:bullet "item"] (first (md "+ item")))
+  (check "md: italic stripped" [:text "italic"] (first (md "*italic*")))
+  (check "md: underscore italic stripped" [:text "under"] (first (md "_under_")))
+  (check "md: snake_case intact" [:text "snake_case_here"] (first (md "snake_case_here")))
+  (check "md: bold in heading" [:heading "bold"] (first (md "## **bold**"))))
 
 (let [msgs (chat/build-messages "S" (vec (repeat 45 {:role :user :text "hi"})) :context-budget 40)]
   (check "folding prepends a summary" true (str/includes? (:content (second msgs)) "earlier context"))
@@ -163,17 +171,31 @@
   (check "max-turns clears busy" false (:busy? st)))
 
 ;; -- working context lines ------------------------------------------------------
-(check "boot-context-lines with board not ready"
-       ["Working directory: /x"
-        "Project root: /x"
+(check "boot-context-lines with board not ready (cwd = project root)"
+       ["Working directory (project root): /x"
         "Taskboard: NOT initialized — board/scope/hook tools will error; use run_shell instead (or run `faraday init` first)."]
        (chat/boot-context-lines {:cwd "/x" :proj-root "/x" :board-ready? false}))
 
-(check "boot-context-lines with board ready"
-       ["Working directory: /x"
-        "Project root: /x"
+(check "boot-context-lines with board ready (cwd = project root)"
+       ["Working directory (project root): /x"
         "Taskboard: ready — board/scope/hook/pool tools work."]
        (chat/boot-context-lines {:cwd "/x" :proj-root "/x" :board-ready? true}))
+
+(check "boot-context-lines full context"
+       ["Working directory: /repo/sub"
+        "Project root: /repo"
+        "Project: a control plane"
+        "Taskboard: ready — board/scope/hook/pool tools work."
+        "Git: main · dirty (1 changed, 1 untracked)"
+        "Recent commits: abc123 first | def456 second"
+        "Open tasks:\n  t-1 [high][open] fix the thing"]
+       (chat/boot-context-lines {:cwd "/repo/sub"
+                                 :proj-root "/repo"
+                                 :board-ready? true
+                                 :project-desc "a control plane"
+                                 :git-summary "main · dirty (1 changed, 1 untracked)"
+                                 :recent-commits "abc123 first | def456 second"
+                                 :tasks ["t-1 [high][open] fix the thing"]}))
 
 (let [d (str (.toAbsolutePath (java.nio.file.Files/createTempDirectory "fctx" (make-array java.nio.file.attribute.FileAttribute 0))))
       _ (spit (str d "/b.txt") "")
@@ -181,6 +203,25 @@
   (check "top-level-summary sorts names"
          "a.txt b.txt"
          (chat/top-level-summary d)))
+
+(let [d (str (.toAbsolutePath (java.nio.file.Files/createTempDirectory "fctx" (make-array java.nio.file.attribute.FileAttribute 0))))
+      _ (spit (str d "/README.md") "# Title\n\nA one-line project descriptor.\n")
+      _ (spit (str d "/other.txt") "")]
+  (check "readme-desc skips the heading and reads the description"
+         "A one-line project descriptor."
+         (chat/readme-desc d)))
+
+(let [d (str (.toAbsolutePath (java.nio.file.Files/createTempDirectory "fctx" (make-array java.nio.file.attribute.FileAttribute 0))))]
+  (check "git-status outside a repo is nil" nil (chat/git-status d))
+  (check "git-summary outside a repo is nil" nil (chat/git-summary d))
+  (h/run-command ["git" "-C" d "init" "-q"] 4000)
+  (spit (str d "/f.txt") "x")
+  (h/run-command ["git" "-C" d "-c" "user.email=a@b.c" "-c" "user.name=t" "add" "f.txt"] 4000)
+  (h/run-command ["git" "-C" d "-c" "user.email=a@b.c" "-c" "user.name=t" "commit" "-qm" "first"] 4000)
+  (check "git-status clean repo" "clean" (chat/git-status d))
+  (spit (str d "/f.txt") "y")
+  (check "git-status dirty repo counts the change" "dirty (1 changed)" (chat/git-status d))
+  (check "git-summary joins branch and status" true (str/includes? (chat/git-summary d) "dirty (1 changed)")))
 
   (println "chat_test OK"))
 

@@ -82,7 +82,7 @@
   (tui/frame!)
   ;; Fold the 13-line code block by rendering the entry directly: the header is
   ;; a button, and the verbatim lines are absent until it is opened.
-  (let [h ((var chat/entry-hiccup) (atom #{}) 60 0 {:role :assistant :text (str "```\n" code-lines "\n```")})
+  (let [h ((var chat/entry-hiccup) (atom #{}) 60 false 0 {:role :assistant :text (str "```\n" code-lines "\n```")})
         s (pr-str h)]
     (check "entry-hiccup folds a long code block" true (str/includes? s "code · 13 lines"))
     (check "folded code body is hidden" false (str/includes? s "(defn x [] 1)"))))
@@ -116,9 +116,14 @@
   (check "kb: Tab+Enter expands the fold"
          true (str/includes? (apply str (scr/lines screen)) "secret line")))
 
-;; -- long prose folds whole and expands ----------------------------------------
+;; -- long prose folds; the latest answer stays open ---------------------------
 (let [prose (str/join "\n" (repeat 10 "A rather long line of assistant prose that wraps around."))
-      fake-call (fn [_] (pr-str {:done prose}))
+      calls (atom 0)
+      fake-call (fn [_]
+                  (swap! calls inc)
+                  (if (= 1 @calls)
+                    (pr-str {:done prose})
+                    (pr-str {:done "short final answer"})))
       fake-exec (fn [_ _] {:status :ok :exit 0 :stdout ""})
       app (chat/chat-app {:call fake-call :exec fake-exec :wrap 40})
       root (w/node :window {})
@@ -126,16 +131,19 @@
   (tui/attach! root screen)
   (ui/mount root :window [app])
   (tui/frame!)
-  (tui/press! 104)
-  (tui/press! 10)
-  (Thread/sleep 150)
-  (tui/drain!)
-  (tui/frame!)
+  (doseq [_ (range 2)]            ; two turns: a long answer, then a short one
+    (tui/press! 104)
+    (tui/press! 10)
+    (Thread/sleep 150)
+    (tui/drain!)
+    (tui/frame!))
   (let [text (apply str (scr/lines screen))]
-    (check "long prose folds to an assistant summary"
+    (check "earlier long prose folds to an assistant summary"
            true (str/includes? text "assistant · "))
-    (check "folded prose body is hidden"
-           false (str/includes? text "wraps around")))
+    (check "earlier folded prose body is hidden"
+           false (str/includes? text "wraps around"))
+    (check "the latest answer stays open"
+           true (str/includes? text "short final answer")))
   (let [btn (find-button #(str/includes? % "assistant · ") root)]
     (check-true "prose fold header button exists" (some? btn))
     ((get-in @btn [:props :on-click]))
