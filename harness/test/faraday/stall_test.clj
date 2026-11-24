@@ -40,5 +40,16 @@
   (f nil) (f nil) (f :good)
   (check "a good answer resets the breaker" false (:open? @b)))
 
+(let [calls (atom 0)
+      state (r/atom {:messages [{:role :user :text "x"}] :busy? true})
+      interrupt (atom true)
+      opts {:call (fn [_] (swap! calls inc) "{:done \"never\"}")
+            :exec (fn [_ _] {:status :ok :exit 0 :stdout ""})
+            :system "S" :max-turns 4 :interrupt interrupt}]
+  (chat/run-turn! opts state [{:role :user :text "x"}])
+  (check "interrupt stops before any model call" 0 @calls)
+  (check "interrupt appends a Stopped note" "Stopped." (-> @state :messages last :text))
+  (check "interrupt clears busy" false (:busy? @state)))
+
 (println "ALL STALL TESTS PASSED")
 (shutdown-agents)

@@ -165,6 +165,21 @@
   (check "run_jolt result reaches the transcript" true
          (str/includes? (apply str (scr/lines screen)) "1")))
 
+;; -- scroll: the always-focused composer must not steal the arrow keys --------
+(let [fake-call (fn [_] "{:done \"ok\"}")
+      fake-exec (fn [_ _] {:status :ok :exit 0 :stdout ""})
+      app (chat/chat-app {:call fake-call :exec fake-exec :wrap 40})
+      root (w/node :window {})
+      screen (scr/buffer-screen 60 20)]
+  (tui/attach! root screen)
+  (ui/mount root :window [app])
+  (tui/frame!)
+  (tui/press! 104) (tui/press! 10)   ; send "h" -> pins the transcript scroll
+  (Thread/sleep 150) (tui/drain!) (tui/frame!)
+  (tui/press! 259) (tui/drain!) (tui/frame!)   ; up arrow scrolls
+  (check "up arrow scrolls off the bottom pin" true
+         (< (get-in @(find-widget :scroll root) [:state :y-offset] 2147483647) 1000000)))
+
 ;; -- fatal tool errors stop the turn -----------------------------------------
 (check "group-members parses /etc/group"
        #{"jm" "bob"}

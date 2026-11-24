@@ -22,6 +22,7 @@
             [glimmer-tui.core :as tui]
             [glimmer-tui.keys :as k]
             [glimmer-tui.widget :as w]
+            [glimmer-tui.widgets.scroll :as scroll]
             [jolt.host]
             [jolt.markdown.core :as md]))
 
@@ -466,6 +467,7 @@
   Safe to run on a worker thread (only ratom swaps, no widget touches)."
   [opts state entries]
   (let [{:keys [call exec system max-turns max-stall]} opts
+        interrupt (or (:interrupt opts) (atom false))
         max-stall (or max-stall 3)
         run-one (fn [name args]
                   (let [res (exec name args)
@@ -522,6 +524,10 @@
         (force-final-answer! call system es state
           "Your last tools made no progress.")
 
+        @interrupt
+        (do (swap! state update :messages conj {:role :assistant :text "Stopped."})
+            (swap! state assoc :busy? false :error nil))
+
         :else
         (let [outcome (try (step! es)
                            (catch Exception e
@@ -572,6 +578,26 @@
      (when-let [sw (some-> (root-widget) find-scroll-widget)]
        (swap! sw update :state assoc :x-offset 0 :y-offset 2147483647)
        (w/touch!)))))
+
+(defn- transcript-scroll!
+  "Scroll the transcript viewport by what `ev` implies. The composer entry is
+  always focused, so arrow/page keys never reach the :scroll widget (a sibling);
+  they bubble here instead and we drive the laid-out scroll node directly."
+  [ev]
+  (let [{:keys [tree root]} @#'glimmer-tui.core/app]
+    (when (and tree root)
+      (when-let [n (some (fn [x] (when (= :scroll (w/container-kind (:tag x))) x))
+                         (w/walk tree))]
+        (when-let [wid (w/find-widget root (:id n))]
+          (let [page (max 1 (dec (max 1 (:h (:viewport n) 0))))
+                dy (cond
+                     (k/match? ev "up") -1
+                     (k/match? ev "down") 1
+                     (k/match? ev "pgup") (- page)
+                     (k/match? ev "pgdn") page
+                     :else nil)]
+            (when (some? dy)
+              (scroll/scroll-by! wid n 0 dy))))))))
 
 (defn- wrap-width
   "Columns to wrap transcript text to: the terminal width (guarded) minus the
@@ -625,28 +651,32 @@
 
 (defn chat-session
   "A headless chat: owns the transcript and drives the tool loop. Returns
-  {:state (ratom {:messages :busy? :error}) :send! (fn text)}. The terminal TUI
-  renders :state; the web console can render and drive the same :state, so both
-  clients see one conversation."
+  {:state (ratom {:messages :busy? :error}) :send! (fn text)
+  :interrupt! (fn)}. The terminal TUI renders :state; the web console can
+  render and drive the same :state, so both clients see one conversation.
+  interrupt! asks a running turn to stop at the next step boundary."
   [{:keys [call exec system max-turns max-stall stores thread-id]}]
   (let [state (r/atom {:messages (or (when (and stores thread-id)
                                       (try (session/resume stores thread-id)
                                            (catch Exception _ nil)))
                                     [])
                        :busy? false :error nil})
+        interrupt (atom false)
         send! (fn [text]
                 (let [text (str/trim (str text))]
                   (when (and (seq text) (not (:busy? @state)))
                     (let [es (conj (:messages @state) {:role :user :text text})]
+                      (reset! interrupt false)
                       (swap! state assoc :busy? true :error nil :messages es)
                       (future
                         (run-turn! {:call call :exec exec :system system
-                                    :max-turns max-turns :max-stall max-stall}
+                                    :max-turns max-turns :max-stall max-stall
+                                    :interrupt interrupt}
                                    state es)
                         (when (and stores thread-id)
                           (try (session/persist! stores thread-id (:messages @state))
                                (catch Exception _ nil))))))))]
-    {:state state :send! send!}))
+    {:state state :send! send! :interrupt! (fn [] (reset! interrupt true))}))
 
 (defn entry-segments
   "One conversation entry as render segments. `wrap` is the prose column width;
@@ -954,9 +984,17 @@
         sess (chat-session {:call call :exec exec :system system :max-turns max-turns
                             :stores stores :thread-id thread-id})
         state (:state sess)
+        interrupt! (:interrupt! sess)
+        queued (r/atom nil)
         draft (r/atom "")
         tick (r/atom 0)
-        _ (tui/every! 100 #(swap! tick inc))
+        _ (tui/every! 100
+                      (fn []
+                        (swap! tick inc)
+                        (when (and (seq @queued) (not (:busy? @state)))
+                          (let [t @queued]
+                            (reset! queued nil)
+                            ((:send! sess) t)))))
         model (or (:model cfg) "faraday")
         expanded (r/atom #{})
         copied (r/atom nil)
@@ -988,11 +1026,18 @@
         send!
         (fn []
           (let [text (str/trim (str @draft))]
-            (when (and (seq text) (not (:busy? @state)))
-              (reset! draft "")
-              (reset! hist-idx nil)
-              (scroll-to-bottom!)
-              ((:send! sess) text))))]
+            (cond
+              (empty? text) nil
+              (:busy? @state)
+              (do (reset! queued text)
+                  (reset! draft "")
+                  (reset! copied nil))
+
+              :else
+              (do (reset! draft "")
+                  (reset! hist-idx nil)
+                  (scroll-to-bottom!)
+                  ((:send! sess) text)))))]
     (fn []
       (let [{:keys [messages busy? error]} @state
             last-assistant-idx (last (keep-indexed (fn [i e] (when (= :assistant (:role e)) i)) messages))]
@@ -1001,7 +1046,11 @@
                           (cond
                             (k/match? ev "ctrl+y") (do (copy-last-answer!) true)
                             (k/match? ev "ctrl+p") (do (recall! :prev) true)
-                            (k/match? ev "ctrl+n") (do (recall! :next) true)))}
+                            (k/match? ev "ctrl+n") (do (recall! :next) true)
+                            (k/match? ev "ctrl+g") (do (interrupt!) true)
+                            (or (k/match? ev "up") (k/match? ev "down")
+                                (k/match? ev "pgup") (k/match? ev "pgdn"))
+                            (do (transcript-scroll! ev) true)))}
          [:scroll {:orientation :vertical :vexpand true}
           (into [:vbox {:spacing 0 :padding [1 2 1 1]}]
                 (if (empty? messages)
@@ -1014,11 +1063,13 @@
           [:label {:label (str "model " model) :color (:muted pal) :dim true}]
           (let [recall-hint (when (some? @hist-idx)
                               (str "recall " (inc @hist-idx) "/" (count (user-texts))
-                                   " · ctrl+n newer · ctrl+p older"))]
-            [:label {:label (or @copied recall-hint
-                                "ctrl+c quit · ctrl+y copy · ctrl+p/n recall · tab folds · enter open")
-                     :color (if (or @copied recall-hint) (:assistant pal) (:muted pal))
-                     :dim (not (or @copied recall-hint))
+                                   " · ctrl+n newer · ctrl+p older"))
+                queued-hint (when (seq @queued)
+                              (str "queued: " (subs (str @queued) 0 (min 24 (count (str @queued))))))]
+            [:label {:label (or @copied recall-hint queued-hint
+                                "ctrl+c quit · ctrl+y copy · ctrl+g stop · ctrl+p/n recall · ↑/↓ pgup/pgdn scroll")
+                     :color (if (or @copied recall-hint queued-hint) (:assistant pal) (:muted pal))
+                     :dim (not (or @copied recall-hint queued-hint))
                      :halign :end :hexpand true}])]
          (when error
            [:label {:label (str "⚠ " error) :color (:danger pal)}])
