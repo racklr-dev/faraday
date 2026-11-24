@@ -1,14 +1,14 @@
 # faraday — one control plane, one gate, one console
 
-Faraday is the racklr control plane: it admits work against a resource budget,
+Faraday is an agent harness with a control plane: it admits work against a resource budget,
 authorizes it with [Cedar](https://github.com/cedar-policy/cedar) policy, runs
 it inside real KVM microVMs ([libkrun](https://github.com/containers/libkrun)
 2.0), records every thread message in an append-only ledger, and shows the
-whole plane live in a browser.
+whole plane live in a browser, a tui, or in a shared ledger.
 
-This repository is a monorepo for the plane's libraries and the console. The
-jolt-* substrate it builds on (jolt-admission, jolt-cedar, jolt-microvm,
-jolt-oci, jolt-libkrun, jolt-pty, jolt-exec, jolt-tapmasq) stays in its own
+This repository is a monorepo composed of various jolt libraries. The
+jolt-* it builds on (jolt-cedar, jolt-microvm,
+jolt-oci, jolt-libkrun, jolt-pty, jolt-exec, jolt-tapmasq, as well as glimmer-tui, glimmer-tui-client) are in their own
 pinned git dependencies.
 
 ## Modules
