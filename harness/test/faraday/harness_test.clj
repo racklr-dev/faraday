@@ -4,7 +4,9 @@
 ;; Run: cd harness && jolt run test/faraday/harness_test.clj
 (ns jolt.test.harness
   (:require [faraday.harness :as h]
-            [faraday.harness.main :as main]))
+            [faraday.harness.main :as main]
+            [faraday.harness.config :as config]
+            [faraday.harness.llm :as llm]))
 
 (defn check [label expected got]
   (if (= expected got)
@@ -173,6 +175,20 @@
       out (main/run-task! root (:id task))]
   (check-true "advisory failure is still green" (:green? out))
   (check "verdict recorded as fail" ["fail"] (mapcat :verdict (:verdicts out))))
+
+;; -- end-to-end: model manifest routes through the middleware spine ---------
+(let [{:keys [root hd project]} (setup!)
+      src (h/scope-add! hd {:project-id (:id project) :rel-path "src"})
+      task (h/task-add! hd {:project-id (:id project) :scope-id (:id src)
+                            :title "model me"})
+      manifest {:v 1 :loop-id "loop-model" :name "model task"
+                :agent {:kind "model"} :max-turns 4}]
+  (with-redefs [config/env (fn [k] (when (= k "DEEPSEEK_API_KEY") "test-key"))
+                llm/provider (fn [_cfg] (fn [_req] {:done {:result :ok}}))]
+    (let [out (main/run-task! root (:id task) :manifest manifest)]
+      (check "model agent ran done" :done (:agent-status out))
+      (check "model result recorded" {:result :ok} (:agent-result out))
+      (check-true "model turn is green (no hooks)" (:green? out)))))
 
 (let [interrupt (atom false)
       start (System/currentTimeMillis)

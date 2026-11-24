@@ -1,9 +1,12 @@
-;; faraday-agent harness test: launch N agents over a fake pool seam, steer
-;; mid-run (declarative :goal, :cancel, :user-input), observe via ledger/memory.
-;; A CountDownLatch-in-atom blocks the fake exec so steering is deterministic.
+;; faraday-agent harness test: the operator surface (launch/steer/observe N
+;; agents) over the yieldable scheduler + middleware spine. Uses fakes for
+;; faraday.pool and jolt.microvm (no KVM/libkrun), one thread-keyed rap server
+;; per harness, and a thread store whose sandbox is a fake handle. A
+;; CountDownLatch-in-atom blocks the fake exec so steering is deterministic.
 ;; Run: cd agent && jolt run test/faraday/harness_test.clj
 (ns jolt.test.agent-harness
   (:require [faraday.agent.harness :as harness]
+            [faraday.thread :as thread]
             [faraday.rap :as rap]
             [faraday.ledger :as ldg]
             [faraday.fanout :as fanout]
@@ -28,6 +31,7 @@
 ;; -- fakes: fake pool + blocking-able exec -----------------------------------
 (def acquired (atom []))
 (def released (atom []))
+(def hibernates (atom []))
 (def exec-cmds (atom []))
 (def exec-result (atom {:stdout "hello\n" :stderr "" :exit 0}))
 (def exec-gate (atom (promise)))
@@ -36,24 +40,32 @@
 (defn reset-fakes! []
   (reset! acquired [])
   (reset! released [])
+  (reset! hibernates [])
   (reset! exec-cmds [])
   (reset! exec-result {:stdout "hello\n" :stderr "" :exit 0})
   (reset! exec-gate (promise))
   (reset! exec-started false))
 
-(defn fake-acquire [p request]
+(defn fake-acquire [_ request]
   (swap! acquired conj request)
-  {:id "h1" :image "img" :vm {:fake? true} :boot-opts {}})
+  {:id "h1" :vm {:fake? true} :boot-opts {}})
 
-(defn fake-release [p handle]
+(defn fake-release [_ handle]
   (swap! released conj (:id handle))
   0)
 
-(defn fake-exec [vm command & {:keys [cwd timeout-ms]}]
+(defn fake-hibernate [_ handle]
+  (swap! hibernates conj (:id handle))
+  (str "snap_" (:id handle)))
+
+(defn fake-restore [_ snap]
+  {:id (subs snap 5) :vm {:fake? true} :boot-opts {}})
+
+(defn fake-exec [_vm command & {:keys [cwd timeout-ms]}]
   (swap! exec-cmds conj command)
   @exec-result)
 
-(defn fake-exec-blocking [vm command & {:keys [cwd timeout-ms]}]
+(defn fake-exec-blocking [_vm command & {:keys [cwd timeout-ms]}]
   (reset! exec-started true)
   @@exec-gate
   (swap! exec-cmds conj command)
@@ -70,15 +82,15 @@
 (defmacro with-fakes [exec-fn & body]
   `(with-redefs [faraday.pool/acquire fake-acquire
                  faraday.pool/release fake-release
+                 faraday.pool/hibernate fake-hibernate
+                 faraday.pool/restore fake-restore
                  jolt.microvm/exec ~exec-fn]
      ~@body))
 
-(defn new-srv [rt]
-  (rap/new-server {:vm-pool {:fake-pool true} :fanout rt}))
-
-(defn new-harness [ledg mem memy rt]
-  (harness/new-harness {:ledger ledg :memo mem :memory memy :fanout rt
-                        :server-fn #(new-srv rt)}))
+(defn new-harness [ledg mem memy rt tmp]
+  (let [store (thread/new-store {:pool ::pool :repo-root (str tmp "/repos")})
+        srv (rap/new-server {:fanout rt :run-hook (thread/rap-hook store)})]
+    (harness/new-harness {:srv srv :store store :rt rt :mem memy})))
 
 (defn mk-manifest [result & {:as overrides}]
   (merge {:v 1
@@ -97,18 +109,19 @@
         l (ldg/new-ledger {:path (str base "/ledger.db")})
         m (memo/new-memo {:path (str base "/memo")})
         memy (memory/new-memory {:path (str base "/memory.db") :ledger l :memo m})
-        rt (fanout/new-runtime {:ledger l})
-        h (new-harness l m memy rt)
+        rt (fanout/new-runtime {:ledger l :memo m})
+        h (new-harness l m memy rt base)
         ctrls (harness/launch! h {:n 3 :manifest (mk-manifest "ok")
-                                  :task "shared goal" :thread-id "thr_swarm"})]
+                                  :task "shared goal"})]
     (check "three launched" 3 (count ctrls))
-    (check "distinct thread-ids" #{"thr_swarm-0" "thr_swarm-1" "thr_swarm-2"}
-           (set (map :thread-id ctrls)))
+    (check "three distinct thread-ids" 3 (count (set (map :thread-id ctrls))))
+    (check "thread-ids are thr_ prefixed" true
+           (every? #(clojure.string/starts-with? % "thr_") (map :thread-id ctrls)))
     (let [outs (harness/wait-all h)]
       (check "all agents done" [:done :done :done] (mapv #(get-in % [:outcome :status]) outs))
       (check "all agents result ok" ["ok" "ok" "ok"] (mapv #(get-in % [:outcome :result]) outs))
       (check "three execs total" 3 (count @exec-cmds)))
-    (let [obs (harness/observe h "thr_swarm-0")]
+    (let [obs (harness/observe h (:thread-id (first ctrls)))]
       (check "observe status done" :done (:status obs))
       (check-true "observe history non-empty" (pos? (count (:history obs))))
       (check "observe salient empty" {} (:salient obs))
@@ -121,16 +134,16 @@
         l (ldg/new-ledger {:path (str base "/ledger.db")})
         m (memo/new-memo {:path (str base "/memo")})
         memy (memory/new-memory {:path (str base "/memory.db") :ledger l :memo m})
-        rt (fanout/new-runtime {:ledger l})
-        h (new-harness l m memy rt)
+        rt (fanout/new-runtime {:ledger l :memo m})
+        h (new-harness l m memy rt base)
         manifest (mk-manifest "never" :agent
                               {:kind "script"
                                :script [{:tool-call {:name "run_shell" :args {:argv ["echo" "a"]}}}
                                         {:tool-call {:name "run_shell" :args {:argv ["echo" "b"]}}}
                                         {:tool-call {:name "run_shell" :args {:argv ["echo" "c"]}}}
                                         {:done "never"}]})
-        [ctrl] (harness/launch! h {:n 1 :manifest manifest :thread-id "thr_goal"})]
-    (harness/steer! h "thr_goal" {:goal {:path [:turns] :pred :>= :value 1}})
+        [ctrl] (harness/launch! h {:n 1 :manifest manifest})]
+    (harness/steer! h (:thread-id ctrl) {:goal {:path [:turns] :pred :>= :value 1}})
     (deliver @exec-gate true)
     (let [out (first (harness/wait-all h))]
       (check "goal steered status" :done (:status out))
@@ -146,16 +159,16 @@
         l (ldg/new-ledger {:path (str base "/ledger.db")})
         m (memo/new-memo {:path (str base "/memo")})
         memy (memory/new-memory {:path (str base "/memory.db") :ledger l :memo m})
-        rt (fanout/new-runtime {:ledger l})
-        h (new-harness l m memy rt)
+        rt (fanout/new-runtime {:ledger l :memo m})
+        h (new-harness l m memy rt base)
         manifest (mk-manifest "never" :agent
                               {:kind "script"
                                :script [{:tool-call {:name "run_shell" :args {:argv ["echo" "a"]}}}
                                         {:tool-call {:name "run_shell" :args {:argv ["echo" "b"]}}}
                                         {:done "never"}]})
-        [ctrl] (harness/launch! h {:n 1 :manifest manifest :thread-id "thr_cancel"})]
+        [ctrl] (harness/launch! h {:n 1 :manifest manifest})]
     (check-true "cancel: exec actually started" (wait-until #(deref exec-started) 5000))
-    (harness/steer! h "thr_cancel" {:cancel true})
+    (harness/steer! h (:thread-id ctrl) {:cancel true})
     (deliver @exec-gate true)
     (let [out (first (harness/wait-all h))]
       (check "cancel recorded directive" [:cancel] (:directives out))
@@ -169,11 +182,11 @@
         l (ldg/new-ledger {:path (str base "/ledger.db")})
         m (memo/new-memo {:path (str base "/memo")})
         memy (memory/new-memory {:path (str base "/memory.db") :ledger l :memo m})
-        rt (fanout/new-runtime {:ledger l})
-        h (new-harness l m memy rt)
-        [ctrl] (harness/launch! h {:n 1 :manifest (mk-manifest "ok") :thread-id "thr_directive"})]
+        rt (fanout/new-runtime {:ledger l :memo m})
+        h (new-harness l m memy rt base)
+        [ctrl] (harness/launch! h {:n 1 :manifest (mk-manifest "ok")})]
     (check-true "user-input: exec actually started" (wait-until #(deref exec-started) 5000))
-    (harness/steer! h "thr_directive" {:user-input "please stop soon"})
+    (harness/steer! h (:thread-id ctrl) {:user-input "please stop soon"})
     (deliver @exec-gate true)
     (let [out (first (harness/wait-all h))]
       (check "directive recorded" ["please stop soon"] (:directives out))
@@ -188,13 +201,13 @@
         l (ldg/new-ledger {:path (str base "/ledger.db")})
         m (memo/new-memo {:path (str base "/memo")})
         memy (memory/new-memory {:path (str base "/memory.db") :ledger l :memo m})
-        rt (fanout/new-runtime {:ledger l})
-        h (new-harness l m memy rt)
-        [ctrl] (harness/launch! h {:n 1 :manifest (mk-manifest "ok") :thread-id "thr_mem"})]
+        rt (fanout/new-runtime {:ledger l :memo m})
+        h (new-harness l m memy rt base)
+        [ctrl] (harness/launch! h {:n 1 :manifest (mk-manifest "ok")})]
     (harness/wait-all h)
-    (memory/note! memy "thr_mem" :goal "port the narrow waist")
-    (memory/demote! memy "thr_mem" :goal)
-    (let [obs (harness/observe h "thr_mem")]
+    (memory/note! memy (:thread-id ctrl) :goal "port the narrow waist")
+    (memory/demote! memy (:thread-id ctrl) :goal)
+    (let [obs (harness/observe h (:thread-id ctrl))]
       (check "observe salient empty after demote" {} (:salient obs))
       (check "observe breadcrumbs has goal" {:goal "port the narrow waist"} (:breadcrumbs obs)))))
 

@@ -119,6 +119,7 @@ must not be reissued. The pool returns a sandbox handle, not the guest output
 | `argv` | [string] | yes | `argv[0]` is the program; no shell wrapping |
 | `env` | object | ? | environment passed to the guest |
 | `mounts` | [object] | ? | virtiofs mounts: `host-path`, `tag`, `readonly` |
+| `repo` | object | ? | persistent worktree keyed to the owning thread: `mode` (`git`/`jj`/`direct`), `url`, `ref`, `host-path` |
 | `cpu` | int | ? | vCPU count (default 1) |
 | `mem-mb` | int | ? | memory limit in MiB |
 | `timeout-ms` | int | ? | hard kill after this long; absent = pool default |

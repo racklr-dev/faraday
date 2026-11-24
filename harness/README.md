@@ -117,5 +117,7 @@ ladder the agent loop will run.
 Implemented and tested: DB CRUD, prefix-nested scope hook resolution, the
 must-be-able-to-fail registration rule, task-start reification, the honest
 end-to-end run, and the self-improvement gate (observe -> propose -> soak/rollback
--> persist -> record). Turn-granular (pre before the loop, post after); per-cell
-firing lands with the nREPL middleware spine.
+-> persist -> record). `faraday run` fires hooks per-cell through the middleware
+spine (faraday.agent.mw/wrap-guardrails): orient/step pre+post, invoke pre, and
+finalize pre+post, with every run landing in hook_runs and honesty ruled at
+finalization. Non-command hooks record as :skip.

@@ -1,0 +1,7 @@
+{:paths ["src"]
+
+ :deps {racklr-dev/faraday-contracts
+        {:local/root "../contracts"}
+
+        racklr-dev/faraday-pool
+        {:local/root "../pool"}}}

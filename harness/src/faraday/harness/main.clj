@@ -2,15 +2,13 @@
 ;; `jolt -M:harness -- <command> [args]` (or bin/faraday <command> [args]).
 ;; Commands: init, project, scope, hook, task, hooks-for, run, board, help.
 ;; `run` is the end-to-end honesty path: task start -> resolve scope hooks ->
-;; fire pre hooks -> launch the loop (fake sandbox) -> fire post hooks -> record
-;; every hook_runs row -> finalize with expected⊆ran and blocking⊆pass.
+;; compile the middleware spine (faraday.agent.mw) -> launch the loop over the
+;; scheduler -> fire per-cell hooks -> record every hook_runs row -> extract
+;; memory -> finalize with expected⊆ran and blocking⊆pass.
 ;;
-;; Turn granularity: the CLI loop is turn-granular, not cell-granular. Pre hooks
-;; fire before the agent loop, post hooks after; each hook_runs row records the
-;; hook's declared cell. Per-cell firing arrives with the nREPL middleware spine
-;; (faraday.agent.mw.hooks/wrap, ROADMAP Phase 1). Non-command hooks (middleware,
-;; predicate, contract) cannot fire in a turn-granular harness and are recorded
-;; honestly as :skip, so they never block a CLI turn.
+;; Cell granularity: hooks fire per-cell through faraday.agent.mw/wrap-guardrails
+;; (orient/step/invoke/finalize/judge). Non-command hooks (middleware, predicate,
+;; contract) are recorded honestly as :skip, so they never block a turn.
 (ns faraday.harness.main
   (:require [faraday.harness :as h]
             [faraday.harness.supervisor :as sup]
@@ -18,7 +16,12 @@
             [faraday.harness.chat :as chat]
             [faraday.harness.config :as config]
             [faraday.harness.llm :as llm]
-            [faraday.agent.harness :as ahar]
+            [faraday.agent.scheduler :as sched]
+            [faraday.agent.loop :as loop]
+            [faraday.agent.mw :as mw]
+            [faraday.thread :as thread]
+            [faraday.pool :as pool]
+            [jolt.microvm :as microvm]
             [faraday.ledger :as ldg]
             [faraday.memo :as memo]
             [faraday.memory :as memory]
@@ -103,9 +106,11 @@
                 "              [--epic ID] [--manifest EDN]\n"
                 "  task   list [--status open] | show ID | start ID | close ID\n"
                 "  hooks-for <rel-path>   reify the scope's nested hooks as loop-as-data\n"
-                "  run    <task-id> [--manifest file.edn]\n"
-                "         fire the task's hooks around a scripted loop, record hook_runs,\n"
-                "         and finalize the honesty invariant\n"
+                "  run    <task-id> [--manifest file.edn] [--exec shell|sandbox]\n"
+                "         fire the task's hooks around a yieldable scheduler loop, record\n"
+                "         hook_runs, and finalize the honesty invariant; --exec sandbox runs\n"
+                "         tools in a warm faraday-pool microVM (needs /dev/kvm), shell runs\n"
+                "         them on the host (default)\n"
                 "  improve <task-id> [--n N] [--delta D] [--proposer budget|model]\n"
                 "         observe the task's loop run, propose a manifest rewrite, and gate it\n"
                 "         (validate + soak + rollback); persists the winner to the task.\n"
@@ -245,47 +250,88 @@
                     {:done {:result :ok}}]}
    :max-turns 8})
 
-(defn- shell-run-hook
-  "Real host exec for the task loop's rap server: run the request argv on the
-  host (the operator's cwd) and shape the result as a run-hook result. A
-  jolt-sandbox microVM runner can take this slot later."
-  [request]
-  (let [argv (:argv request)
-        r (h/run-command argv (or (:timeout-ms request) 120000))]
-    (if (or (:timeout? r) (nil? (:exit r)))
-      {:status :error :exit nil :stdout (:out r) :stderr "" :error {:message "timed out"}}
-      {:status (if (zero? (:exit r)) :ok :error)
-       :exit (:exit r)
-       :stdout (:out r)
-       :stderr ""
-       :error (when-not (zero? (:exit r))
-                {:message (str "command exited " (:exit r)) :code "exit"})})))
+(defn- scheduler-run!
+  "One yieldable-loop run over a faraday.thread store backed by pool-handle.
+  Builds the store + rap server (thread-keyed) + scheduler, launches one loop
+  with the compiled middleware step-fn, and waits for it. Returns the
+  scheduler's observe map for the single thread."
+  [root ledg memo memy rt pool-handle manifest task step-fn goal-fn]
+  (let [store (thread/new-store {:pool pool-handle
+                                 :repo-root (str root "/.faraday/repos")})
+        srv (rap/new-server {:fanout rt :run-hook (thread/rap-hook store)})
+        sch (sched/new-scheduler {:srv srv :store store :rt rt :mem memy})]
+    (sched/launch! sch {:manifest manifest :task task :n 1
+                        :step-fn step-fn :goal-fn goal-fn})
+    (first (sched/wait-all sch))))
 
-(defn- fire-hook
-  "Fire one command hook out-of-process. Non-command hooks (middleware,
-  predicate, contract) are recorded honestly as :skip in a turn-granular
-  harness."
-  [hk]
-  (let [how (:how hk)
-        cmd (:command how)
-        timeout (or (:timeout-ms how) (:timeout_ms hk) 8000)]
-    (if (and (vector? cmd) (seq cmd))
-      (let [t0 (System/nanoTime)
-            r (h/run-command cmd timeout)
-            ms (long (/ (- (System/nanoTime) t0) 1000000.0))
-            verdict (cond (:timeout? r) :timeout (zero? (:exit r)) :pass :else :fail)]
-        (assoc r :verdict verdict :ms ms))
-      {:verdict :skip
-       :exit nil
-       :out (str "hook " (:id hk) " (" (:kind hk) ") is not turn-granular")
-       :ms 0})))
+(defn- host-scheduler-run!
+  "scheduler-run! over in-process host exec (no KVM): the with-redefs seam the
+  real faraday-pool fills. Exercises the full yield/park/resume/hibernate state
+  machine; warm-VM reuse and snapshot restore are no-ops keyed by handle id."
+  [root ledg memo memy rt manifest task step-fn goal-fn]
+  (let [handles (atom {})
+        next-id (atom 0)
+        acquire (fn [_ _] (let [id (str "host-sb-" (swap! next-id inc))]
+                            {:id id :vm {:host? true :id id} :boot-opts {:image "host"}}))
+        release (fn [_ _] 0)
+        hibernate (fn [_ h] (let [s (str "snap_" (:id h))] (swap! handles assoc s h) s))
+        restore (fn [_ s] (or (get @handles s)
+                              (throw (ex-info "host-sandbox: unknown snapshot"
+                                              {:snapshot-ref s}))))
+        exec (fn [_vm cmd & {:keys [timeout-ms]}]
+               (let [r (h/run-command ["sh" "-c" cmd] (or timeout-ms 120000))]
+                 (if (or (:timeout? r) (nil? (:exit r)))
+                   {:exit 1 :stdout (:out r) :stderr "timed out"}
+                   {:exit (:exit r) :stdout (:out r) :stderr ""})))]
+    (with-redefs [pool/acquire acquire
+                  pool/release release
+                  pool/hibernate hibernate
+                  pool/restore restore
+                  microvm/exec exec]
+      (scheduler-run! root ledg memo memy rt ::host manifest task step-fn goal-fn))))
+
+(defn- sandbox-scheduler-run!
+  "scheduler-run! over a real faraday-pool warm microVM (needs /dev/kvm)."
+  [root ledg memo memy rt manifest task step-fn goal-fn]
+  (let [p (pool/new-pool {:image "alpine:3.20"
+                          :cache-dir (str (System/getProperty "user.home")
+                                          "/.cache/jolt-microvm")
+                          :max-warm 1})]
+    (try
+      (scheduler-run! root ledg memo memy rt p manifest task step-fn goal-fn)
+      (finally (pool/close! p)))))
+
+(defn- model-agent-deps!
+  "Build faraday.agent.model/model-agent opts from the settings surface for a
+  :model manifest, and fail fast when no provider resolves an api key (the same
+  rule as chat and model-proposer). Returns the opts map ready for
+  faraday.agent.mw/compile-step-fn's :model-agent deps."
+  []
+  (let [cfg (config/load-config {})
+        ms (config/model-step-opts cfg {} #(llm/provider %))]
+    (when (empty? (:providers ms))
+      (throw (ex-info "model manifest, but no model providers/roles are configured (settings.json)" {})))
+    (when-not (some #(seq (:api-key (config/resolve-provider cfg % {})))
+                    (keys (:providers ms)))
+      (throw (ex-info (str "no LLM API key for the model agent; set "
+                           "FARADAY_LLM_API_KEY or DEEPSEEK_API_KEY") {})))
+    ms))
 
 (defn run-task!
   "Run one task end to end through the honesty path. root is the project root
-  (holding .faraday/harness.db); :manifest optionally overrides the task loop.
-  Returns the summary map {:task :thread-id :agent-status :hook-runs :green?
-  :missing :blocking-failed :verdicts :expected-ran?}."
-  [root task-id & {:keys [manifest]}]
+  (holding .faraday/harness.db); :manifest optionally overrides the task loop;
+  :exec is \"shell\" (default, host exec over the scheduler+thread state machine)
+  or \"sandbox\" (warm faraday-pool microVM, needs /dev/kvm). Returns the summary
+  map {:task :thread-id :agent-status :hook-runs :green? :missing
+  :blocking-failed :verdicts :expected-ran?}.
+
+  Hooks fire per-cell through faraday.agent.mw/wrap-guardrails (the middleware
+  spine), not turn-granular: orient/step pre+post, invoke pre (post on the next
+  step), finalize pre+post, judge (when a :goal is declared). Every run lands in
+  hook_runs; expected-subset-ran and blocking-subset-pass rule the turn at
+  finalization. A hook whose cell never occurs is honestly missing, so the turn
+  is not green."
+  [root task-id & {:keys [manifest exec]}]
   (let [hd (open-db root)
         started (h/task-start hd task-id)
         hooks (:hooks-vector started)
@@ -296,32 +342,35 @@
         l (ldg/new-ledger {:path (str run-dir "/ledger.db")})
         m (memo/new-memo {:path (str run-dir "/memo")})
         memy (memory/new-memory {:path (str run-dir "/memory.db") :ledger l :memo m})
-        rt (fanout/new-runtime {:ledger l})
-        ah (ahar/new-harness {:ledger l :memo m :memory memy :fanout rt
-                              :server-fn (fn [] (rap/new-server {:run-hook shell-run-hook :fanout rt}))})]
-    (doseq [hk (filter #(= "pre" (:position %)) hooks)]
-      (let [r (fire-hook hk)]
-        (h/record-hook-run! hd {:hook-id (:id hk) :task-id task-id :turn-id turn-id
-                                :cell (:cell hk) :position :pre
-                                :verdict (:verdict r) :exit-code (:exit r)
-                                :output-sha (h/sha-hex (str (:out r))) :output-ms (:ms r)})))
-    (let [ctrls (ahar/launch! ah {:n 1 :manifest manifest :task (:title started) :thread-id turn-id})
-          out (first (ahar/wait-all ah))]
-      (doseq [hk (filter #(= "post" (:position %)) hooks)]
-        (let [r (fire-hook hk)]
-          (h/record-hook-run! hd {:hook-id (:id hk) :task-id task-id :turn-id turn-id
-                                  :cell (:cell hk) :position :post
-                                  :verdict (:verdict r) :exit-code (:exit r)
-                                  :output-sha (h/sha-hex (str (:out r))) :output-ms (:ms r)})))
-      (let [expected (mapv #(select-keys % [:id :gate]) hooks)
-            green (h/turn-green? hd turn-id expected)
-            er (h/expected-ran? hd turn-id (map :id hooks))]
-        (merge {:task task-id
-                :thread-id turn-id
-                :agent-status (get-in out [:outcome :status])
-                :hook-runs (count (h/hook-runs-for-turn hd turn-id))}
-               green
-               {:expected-ran? (:ok er)})))))
+        rt (fanout/new-runtime {:ledger l :memo m})
+        goal-fn (when-let [g (:goal manifest)] (loop/goal-fn g))
+        model? (= "model" (some-> manifest :agent :kind name))
+        step-fn (mw/compile-step-fn
+                 manifest
+                 (cond-> {:memory memy
+                          :goal-fn goal-fn
+                          :hooks hooks
+                          :record-hook-run! (fn [run-map] (h/record-hook-run! hd run-map))
+                          :run-command h/run-command
+                          :turn-id turn-id
+                          :task-id task-id}
+                   model? (assoc :model-agent (model-agent-deps!))))
+        run! (case (or exec "shell")
+               "shell" host-scheduler-run!
+               "sandbox" sandbox-scheduler-run!
+               (throw (ex-info "unknown --exec (want shell|sandbox)" {:exec exec})))]
+    (let [out (run! root l m memy rt manifest (:title started) step-fn nil)
+          _ (try (memory/extract! memy turn-id) (catch Exception _ nil))
+          expected (mapv #(select-keys % [:id :gate]) hooks)
+          green (h/turn-green? hd turn-id expected)
+          er (h/expected-ran? hd turn-id (map :id hooks))]
+      (merge {:task task-id
+              :thread-id turn-id
+              :agent-status (get-in out [:outcome :status])
+              :agent-result (get-in out [:outcome :result])
+              :hook-runs (count (h/hook-runs-for-turn hd turn-id))}
+             green
+             {:expected-ran? (:ok er)}))))
 
 (defn- cmd-run [args]
   (let [{:keys [positional flags]} (parse-args args)
@@ -330,7 +379,7 @@
         manifest (when-let [f (flag flags :manifest)] (edn/read-string (slurp f)))]
     (if-not task-id
       (usage)
-      (prn (run-task! root task-id :manifest manifest)))))
+      (prn (run-task! root task-id :manifest manifest :exec (flag flags :exec))))))
 
 ;; -- improve: the self-improvement gate --------------------------------------
 

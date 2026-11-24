@@ -56,7 +56,7 @@
     (when-not (and (vector? argv) (seq argv))
       (fail! "call args require a non-empty :argv vector" {:call call}))
     (merge {:v 1 :request-id call-id :argv argv}
-           (select-keys args [:image :env :mounts :cpu :mem-mb :timeout-ms :egress]))))
+           (select-keys args [:image :env :mounts :repo :cpu :mem-mb :timeout-ms :egress]))))
 
 (defn- result->segments [r]
   (let [segs (if (seq (:stdout r)) [{:type "text" :content (:stdout r)}] [])]
@@ -106,26 +106,25 @@
 
 (defn- claim-terminal!
   "Deliver the terminal frame for call-id exactly once. Returns true when this
-  call delivered it, false when a terminal was already present."
+  call delivered it, false when a terminal was already present. The subscribers
+  and result callbacks are captured atomically with the terminal swap, so a
+  callback registered concurrently (just before the swap commits) is never lost
+  between the snapshot and the clear."
   [srv call-id frame]
-  (let [call (call-at srv call-id)
-        subs (if call (:subs call) {})
-        rcs (if call (:result-cbs call) {})]
-    (when call
-      (let [claimed? (atom false)]
-        (swap! (:state srv)
-               (fn [s]
-                 (let [c (get-in s [:calls call-id])]
-                   (if (and c (nil? (:terminal c)))
-                     (do (reset! claimed? true)
-                         (-> s (assoc-in [:calls call-id :terminal] frame)
-                               (assoc-in [:calls call-id :subs] {})
-                               (assoc-in [:calls call-id :result-cbs] {})))
-                     s))))
-        (when @claimed?
-          (doseq [cb (vals rcs)] (try (cb frame) (catch Exception _ nil)))
-          (doseq [cb (vals subs)] (try (cb frame) (catch Exception _ nil)))
-          true)))))
+  (let [claimed (atom nil)]
+    (swap! (:state srv)
+           (fn [s]
+             (let [c (get-in s [:calls call-id])]
+               (if (and c (nil? (:terminal c)))
+                 (do (reset! claimed [(:subs c) (:result-cbs c)])
+                     (-> s (assoc-in [:calls call-id :terminal] frame)
+                           (assoc-in [:calls call-id :subs] {})
+                           (assoc-in [:calls call-id :result-cbs] {})))
+                 s))))
+    (when-let [[subs rcs] @claimed]
+      (doseq [cb (vals rcs)] (try (cb frame) (catch Exception _ nil)))
+      (doseq [cb (vals subs)] (try (cb frame) (catch Exception _ nil)))
+      true)))
 
 (defn- run-invocation!
   "The async worker for one call-id. With a :run-hook the server delegates the
@@ -141,7 +140,7 @@
         (let [frame (try
                       (let [request (call->request call-id call)]
                         (if hook
-                          (hook-result->frame call-id (hook request))
+                          (hook-result->frame call-id (hook (assoc request :thread-id thread-id)))
                           (let [h (pool/acquire (:vm-pool srv) request)]
                             (try
                               (let [r (microvm/exec (:vm h)
@@ -170,7 +169,8 @@
 (defn new-server
   "Open a tool server over opts, a map with :fanout (faraday-fanout runtime) and
   either :vm-pool (faraday-pool handle) or :run-hook (fn request -> {:status
-  :ok|:error|:denied :exit int? :stdout string? :stderr string? :error map?}),
+  :ok|:error|:denied :exit int? :stdout string? :stderr string? :error map?},
+  the request carrying :thread-id, the owning thread),
   plus an optional :policy-hook (fn call -> truthy to permit, nil = always
   permit). When :run-hook is given it replaces the acquire/exec/release path
   and owns the Thread Message reporting; the server only maps its result to the

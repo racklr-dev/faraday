@@ -18,8 +18,9 @@ pinned git dependencies.
 | `contracts/` | faraday-contracts | the declared wire contracts: one definition per shape, derived decode/encode/schema |
 | `core/` | faraday.core | the plane: budget admission + Cedar authorization + sandbox runs |
 | `pool/` | faraday.pool | warm VM pool over jolt-microvm + jolt-oci |
+| `thread/` | faraday.thread | thread-keyed sandbox + repo store (hibernate/restore): a ThreadId keys an agent's sandbox and repo state |
 | `rap/` | faraday.rap | tool invocation server (requests → runs) |
-| `agent/` | faraday.agent | the agent framework: loop-as-data, model step-fn, and the launch/steer/observe harness over rap |
+| `agent/` | faraday.agent | the agent framework: loop-as-data, model step-fn, the launch/steer/observe harness, plus a yieldable loop (faraday.agent.yield) and a bounded scheduler (faraday.agent.scheduler) |
 | `fanout/` | faraday.fanout | thread-message fanout over the ledger |
 | `ledger/` | faraday.ledger | single writer, append-only thread ledger |
 | `memo/` | faraday.memo | content-addressed message memoization |
@@ -56,10 +57,18 @@ beta — the MVP plane runs end-to-end in-process: real KVM sandboxes, Cedar
 authorization, budget admission, ledger/fanout, the live console, and the
 agent stack (loop-as-data manifests with a soak/rollback gate, model
 step-fn, two-tier memory, and the launch/steer/observe harness), plus the
+async agent runtime: faraday.thread keys each ThreadId to a sandbox + repo
+worktree, faraday.agent.yield parks a waiting agent as checkpointed data (no
+live process between turns), and faraday.agent.scheduler resumes it from the
+rap result callback over a bounded warm VM pool — infinity's model. Also the
 first self-improvement slice: `faraday improve` observes a loop run, proposes
 a manifest rewrite, and routes it through the same soak/rollback gate, then
-persists the winner to the task. See each module's README for what its own
-tests cover.
+persists the winner to the task. The middleware spine (faraday.agent.mw) now
+compiles a manifest + deps into the ROADMAP wrap-* chain — history windowing,
+hot-memory injection, the routed/repairing model step, one permission decision
+point, the finalization goal judge, and per-cell guardrails that fire a scope's
+pre/post hooks into hook_runs — and `faraday run` drives every task through it.
+See each module's README for what its own tests cover.
 
 ## License
 

@@ -29,10 +29,12 @@
 ;; -- the loop manifest as a declared contract --------------------------------
 
 (define-contract agent-spec
-  (:kind :string :required true :enum #{"script"}
-   :doc "how to realize the agent from data; :script -> scripted-agent")
-  (:script :array :required true :of :any
-   :doc "ordered actions: {:tool-call ..} or {:done ..}"))
+  (:kind :string :required true :enum #{"script" "model"}
+   :doc "how to realize the agent from data; :script -> scripted-agent, :model -> faraday.agent.mw/compile-step-fn + deps :model-agent")
+  (:script :array :required false :of :any
+   :doc "ordered actions: {:tool-call ..} or {:done ..} (required for :script)")
+  (:model :object :required false
+   :doc "model agent opts realized by faraday.agent.mw/wrap-router (required for :model)"))
 
 (define-contract soak-spec
   (:n :integer :required true :doc "number of soak runs that must all pass"))
@@ -76,12 +78,15 @@
 
 (defn manifest-agent
   "Build the agent step-fn the manifest's :agent spec describes. The spec is
-  data; only its :kind decides how it is realized. :script -> scripted-agent."
+  data; only its :kind decides how it is realized. :script -> scripted-agent.
+  :model is realized by faraday.agent.mw/compile-step-fn (the middleware spine)
+  from deps :model-agent, never here."
   [manifest]
   (let [spec (:agent manifest)
         kind (some-> spec :kind name)]
     (case kind
       "script" (agent/scripted-agent (:script spec))
+      "model" (fail! "manifest :agent :kind model is realized by faraday.agent.mw/compile-step-fn, not manifest-agent" {:agent spec})
       (fail! (str "unknown agent kind: " (pr-str kind)) {:agent spec}))))
 
 (defn goal-fn
@@ -111,7 +116,8 @@
   "Drive one run of the loop the manifest describes over a faraday-rap server.
   opts: :rap (server handle, required) and :manifest, or :memo + :key to load
   it. :task/:thread-id/:max-turns/:timeout-ms override the manifest; :goal (a
-  predicate fn) overrides the manifest's declarative :goal spec.
+  predicate fn) overrides the manifest's declarative :goal spec; :step-fn (a
+  compiled faraday.agent.mw step) overrides manifest-agent for :model manifests.
   Returns the run! outcome."
   [opts]
   (let [srv (:rap opts)
@@ -121,8 +127,9 @@
     (when-not m (fail! "run-manifest! requires :manifest or (:memo + :key)" {:opts opts}))
     (let [base (select-keys m [:task :thread-id :max-turns :timeout-ms])
           over (non-nil (select-keys opts [:task :thread-id :max-turns :timeout-ms]))
-          goal (or (:goal opts) (goal-fn (:goal m)))]
-      (agent/run! (cond-> (assoc (merge base over) :rap srv :agent (manifest-agent m))
+          goal (or (:goal opts) (goal-fn (:goal m)))
+          step (or (:step-fn opts) (manifest-agent m))]
+      (agent/run! (cond-> (assoc (merge base over) :rap srv :agent step)
                     goal (assoc :goal goal))))))
 
 ;; -- the agent rewrites the loop as data --------------------------------------

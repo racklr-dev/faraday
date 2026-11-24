@@ -86,6 +86,9 @@
   (check "refusal names loop-id" ["loop-id"] (:path r)))
 
 (let [r (loop/validate (assoc-in (mk-manifest "ok") [:agent :kind] "model"))]
+  (check-true "model agent kind is now a valid manifest" (not (contracts/refusal? r))))
+
+(let [r (loop/validate (assoc-in (mk-manifest "ok") [:agent :kind] "bogus"))]
   (check-true "unknown agent kind is a refusal" (contracts/refusal? r))
   (check "refusal names agent kind" ["agent" "kind"] (:path r)))
 

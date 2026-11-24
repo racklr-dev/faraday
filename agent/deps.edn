@@ -16,4 +16,7 @@
         {:local/root "../fanout"}
 
         racklr-dev/faraday-rap
-        {:local/root "../rap"}}}
+        {:local/root "../rap"}
+
+        racklr-dev/faraday-thread
+        {:local/root "../thread"}}}

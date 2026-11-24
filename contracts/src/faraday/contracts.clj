@@ -330,6 +330,13 @@
   (:ts :string :required true :doc "RFC 3339 UTC timestamp")
   (:payload :object :required true :doc "kind-specific payload"))
 
+(define-contract repo-state
+  (:mode :string :required true :enum #{"git" "jj" "direct"}
+   :doc "how the worktree is materialized")
+  (:url :string :required false :doc "remote URL for :git/:jj")
+  (:ref :string :required false :doc "branch or commit to check out")
+  (:host-path :string :required false :doc "existing host worktree for :direct"))
+
 (define-contract sandbox-request
   (:v :integer :required true :doc "always 1")
   (:request-id :string :required true :doc "idempotency key for this boot")
@@ -339,6 +346,8 @@
    :doc "argv[0] is the program; no shell wrapping")
   (:env :object :required false :doc "environment passed to the guest")
   (:mounts :array :required false :of :mount :doc "virtiofs mounts")
+  (:repo :object :required false :of :repo-state
+   :doc "persistent worktree keyed to the owning thread")
   (:cpu :integer :required false :default 1 :doc "vCPU count")
   (:mem-mb :integer :required false :doc "memory limit in MiB")
   (:timeout-ms :integer :required false :doc "hard kill after this long")
