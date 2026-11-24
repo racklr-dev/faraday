@@ -68,19 +68,33 @@
        (when (seq (:error e)) (str ", error: " (:error e)))
        ":\n" (or (:text e) "")))
 
+(defn- fold-summary
+  "A deterministic one-line summary of the folded entries: counts, errors, and
+  the last task, so the model keeps enough context without the raw transcript."
+  [es]
+  (let [roles (frequencies (map :role es))
+        errors (seq (keep :error es))
+        last-user (last (filter #(= :user (:role %)) es))]
+    (str "(earlier context: " (count es) " entries, "
+         (or (:tool-call roles) 0) " tool calls, "
+         (or (:tool-result roles) 0) " tool results"
+         (when errors (str ", " (count errors) " errors"))
+         (when last-user
+           (str "; last task: " (subs (str (:text last-user)) 0 (min 80 (count (str (:text last-user)))))))
+         ")")))
+
 (defn build-messages
   "Turn conversation entries into OpenAI chat messages. Entries use the chat's
   own roles (:user :assistant :tool-call :tool-result); a tool-call becomes an
   assistant turn carrying the EDN the model emitted, and a tool-result becomes
   a user turn describing what the tool did. opts: :context-budget (default 40) caps
-  the transcript entries sent; older ones are folded into a single summary so a
-  long conversation stays inside the model's window and the prefix stays cache-
-  friendly."
+  the transcript entries sent; older ones fold into one summary line so a long
+  conversation stays inside the model's window and the prefix stays cache-friendly."
   [system entries & {:keys [context-budget] :or {context-budget 40}}]
   (let [n (count entries)
         entries (if (> n context-budget)
                   (let [dropped (- n context-budget)]
-                    (into [{:role :user :text (str "(earlier conversation folded: " dropped " entries)")}]
+                    (into [{:role :user :text (fold-summary (take dropped entries))}]
                           (drop dropped entries)))
                   entries)]
     (into [{:role "system" :content system}]

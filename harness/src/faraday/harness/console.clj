@@ -7,10 +7,14 @@
   (:require [glimmer.core :as ui]
             [glimmer.ratom :as r]
             [glimmer-tui.core]
+            [jolt.datastar.core :as datastar]
             [faraday.console.board :as board]
+            [faraday.console.handler :as handler]
             [faraday.console.runtime :as crt]
             [faraday.console.views.glimmer :as gv]
-            [faraday.harness.chat :as chat]))
+            [faraday.harness.chat :as chat]
+            [ring-chez.adapter :as adapter]
+            [clojure.string :as str]))
 
 (def modes
   [["chat" "Chat"] ["overview" "Overview"] ["runs" "Runs"]
@@ -38,15 +42,31 @@
      "bench" (gv/bench-section @board/board)
      [:label {:label "unknown view"}])])
 
+(defn- start-gateway!
+  "Start the web gateway on `port` if nothing is listening there; return true if
+  this process started it, false if one is already running."
+  [runtime port]
+  (reset! handler/runtime runtime)
+  (let [app (datastar/wrap-datastar handler/handler {:tick-ms 15})]
+    (try
+      (adapter/run-server app {:port port :strategy :fibers})
+      (println (str "gateway: http://127.0.0.1:" port))
+      true
+      (catch Exception e
+        (if (str/includes? (str (ex-message e)) "already in use")
+          (do (println (str "gateway already running on :" port)) false)
+          (throw e))))))
+
 (defn run!
-  "Open the console stack (board + sampler) and render the modes in the
-  terminal, starting at `initial-view` (default chat). The chat's pool tools
-  see the same pool handle via `pool-ref`."
-  [{:keys [chat-opts initial-view pool-ref] :or {initial-view "chat"}}]
+  "Open the console stack (board + sampler), start the web gateway if it is not
+  running, and render the modes in the terminal, starting at `initial-view`
+  (default chat). The chat's pool tools see the same pool handle via `pool-ref`."
+  [{:keys [chat-opts initial-view pool-ref port] :or {initial-view "chat" port 8787}}]
   (let [runtime (crt/open-runtime! {:on-run board/record-run!})]
     (when pool-ref (reset! pool-ref (:pool runtime)))
     (board/seed-config! runtime)
     (board/sample! runtime)
     (board/start-sampler! runtime 500)
+    (start-gateway! runtime port)
     (let [view (r/atom initial-view)]
       (ui/run (fn [] (app chat-opts view)) :title "faraday"))))
