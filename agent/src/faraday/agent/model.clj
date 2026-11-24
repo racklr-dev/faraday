@@ -12,13 +12,22 @@
   provider fn. On an invalid action it repairs (re-calls with repair guidance),
   then escalates to a stronger provider role, then circuit-breaks so a weak
   model cannot spin the loop forever. Provider alias/role config is the dirge
-  routing shape: {alias provider-fn} + {position alias}, realized by
-  routed-provider.")
+  routing shape: {alias provider-fn} + {position alias-or-role-map}, realized
+  by routed-provider (a map value carries per-role :model/:reasoning/
+  :temperature/:system overrides merged into the request).")
 
 (def default-role-config
   {:default :default
    :repair :repair
    :escalate :escalate})
+
+(def default-escalation-ladder
+  "Rungs tried in order after the :default role fails; :attempts is per rung.
+  The :orchestrator rung is the deep-thinker escalation — include it only when
+  a role/agent of that name is configured, or model-agent skips it because its
+  alias has no provider."
+  [{:role :repair :attempts 2}
+   {:role :escalate :attempts 1}])
 
 (defn- fail! [msg data]
   (throw (ex-info msg (assoc data :faraday.agent.model/error true))))
@@ -66,10 +75,17 @@
                    :providers is given.
     :providers     {alias (fn request -> response)}; combined with
                    :role-config via routed-provider.
-    :role-config   {policy-position alias}; default {:default :default
-                   :repair :repair :escalate :escalate}.
+    :role-config   {policy-position alias-or-role-map}; default {:default
+                   :default :repair :repair :escalate :escalate}. A map value
+                   is {provider alias, model, reasoning, temperature, system}
+                   merged into the request for that rung.
     :max-repairs         repairs before escalation (default 2)
     :max-escalations     escalations before circuit-break (default 1)
+    :escalation-ladder   [{:role pos :attempts n}] tried in order after
+                         :default fails; :role is a role-config position, so
+                         :orchestrator is the deep-thinker rung when a
+                         provider for it exists (default: [:repair :escalate]
+                         with the max-* budgets)
     :breaker-threshold   consecutive full failures that open the circuit
                          (default 3)
     :parse        (fn response -> action) default identity
@@ -90,32 +106,42 @@
         breaker (atom {:failures 0 :open? false})
         repair-note (str (or (:guidance opts) "")
                          " Return a valid action: exactly one of "
-                         "{:tool-call {:name .. :args {:argv [..]}}} or {:done ..}.")]
+                         "{:tool-call {:name .. :args {:argv [..]}}} or {:done ..}.")
+        ladder (or (:escalation-ladder opts)
+                   [{:role :repair :attempts max-repairs}
+                    {:role :escalate :attempts max-escalations}])
+        rung-guidance (fn [pos]
+                        (case pos
+                          :repair repair-note
+                          :escalate "Repair failed; return a valid action."
+                          (or (:guidance opts)
+                              "Escalation failed; reason deeply, then return a valid action.")))]
     (when-not (ifn? provider)
       (fail! "model-agent requires a :provider fn or :providers table" {:opts opts}))
     (fn [ctx]
       (if (:open? @breaker)
         {:done {:error :circuit-open}}
-        (let [call (fn [alias g]
-                     (try
-                       (let [resp (provider {:role alias :context ctx :guidance g})
-                             action (parse resp)]
-                         (when (and (map? action) (validate action)) action))
-                       (catch Exception _ nil)))
-              repairs (fn []
-                        (loop [left max-repairs]
-                          (when (pos? left)
-                            (or (call (:repair roles) repair-note)
-                                (recur (dec left))))))
-              escalations (fn []
-                            (loop [left max-escalations]
-                              (when (pos? left)
-                                (or (call (:escalate roles)
-                                          "Repair failed; return a valid action.")
-                                    (recur (dec left))))))
-              action (or (call (:default roles) nil)
-                         (repairs)
-                         (escalations))]
+        (let [resolve-call (fn [pos g]
+                             (let [entry (get roles pos pos)
+                                   alias (if (map? entry) (:provider entry) entry)
+                                   enrich (when (map? entry)
+                                            (select-keys entry [:model :reasoning :temperature :system]))
+                                   request (cond-> {:role alias :context ctx :guidance g}
+                                             enrich (merge enrich))]
+                               (try
+                                 (let [resp (provider request)
+                                       action (parse resp)]
+                                   (when (and (map? action) (validate action)) action))
+                                 (catch Exception _ nil))))
+              try-rung (fn [rung]
+                         (let [pos (:role rung)
+                               g (or (:guidance rung) (rung-guidance pos))]
+                           (loop [left (or (:attempts rung) 1)]
+                             (when (pos? left)
+                               (or (resolve-call pos g)
+                                   (recur (dec left)))))))
+              action (or (resolve-call :default nil)
+                         (some try-rung ladder))]
           (if action
             (do (swap! breaker assoc :failures 0)
                 action)

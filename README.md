@@ -24,6 +24,7 @@ pinned git dependencies.
 | `ledger/` | faraday.ledger | single writer, append-only thread ledger |
 | `memo/` | faraday.memo | content-addressed message memoization |
 | `memory/` | faraday.memory | two-tier agent memory + FTS5 over ledger/memo + checkpoint/resume |
+| `harness/` | faraday.harness | the harness DB (projects/scopes/hooks/hook_runs/tasks) + the runnable CLI |
 | `console/` | faraday.console | the web console (glimmer-datastar + SSE) |
 
 Internal modules reference each other via `:local/root`; each module keeps its
@@ -43,6 +44,7 @@ own README with its API and status.
 
 ```sh
 jolt -M:serve   # from the repo root; then http://127.0.0.1:8787
+jolt -M:harness -- help   # the harness CLI: board, scopes, hooks, tasks, honest runs, improve
 ```
 
 The console composes the whole plane in-process: the dashboard is a peer of
@@ -53,8 +55,11 @@ the gate, not a client, so the budget/policy gate stays authoritative.
 beta — the MVP plane runs end-to-end in-process: real KVM sandboxes, Cedar
 authorization, budget admission, ledger/fanout, the live console, and the
 agent stack (loop-as-data manifests with a soak/rollback gate, robust model
-step-fn, two-tier memory, and the launch/steer/observe harness). See each
-module's README for what its own tests cover.
+step-fn, two-tier memory, and the launch/steer/observe harness), plus the
+first self-improvement slice: `faraday improve` observes a loop run, proposes
+a manifest rewrite, and routes it through the same soak/rollback gate, then
+persists the winner to the task. See each module's README for what its own
+tests cover.
 
 ## License
 

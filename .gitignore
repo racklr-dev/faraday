@@ -1,6 +1,10 @@
 .cpcache/
 .jolt/
+.faraday/
 target/
 *.db
 *.db-shm
 *.db-wal
+
+# nodecode editor temp files
+.nodecode-*

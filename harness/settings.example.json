@@ -1,0 +1,67 @@
+{
+  "_comment": "faraday settings — drop this at ~/.faraday/settings.json (user) or <project>/.faraday/settings.json (project, wins). All keys optional; shown are the built-in defaults plus the dirge-style surface. Never put a raw api_key here; prefer api_key_env and keep keys in env or ~/.nodecode/auth.json. api_key (and the value api_key_env points at) may start with '!' to run a token helper command, e.g. "api_key": "!op read op://private/deepseek --account my", or "!pass show DeepSeek/API".",
+
+  "providers": {
+    "deepseek": {
+      "provider_type": "openai-completions",
+      "base_url": "https://api.deepseek.com/v1",
+      "model": "deepseek-flash",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "reasoning": "low",
+      "temperature": 0
+    },
+    "deepseek-pro": {
+      "provider_type": "openai-completions",
+      "base_url": "https://api.deepseek.com/v1",
+      "model": "deepseek-v4-pro",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "reasoning": "high",
+      "temperature": 0
+    }
+  },
+
+  "roles": {
+    "default":      { "provider": "deepseek" },
+    "repair":       { "provider": "deepseek", "reasoning": "low" },
+    "escalate":     { "provider": "deepseek-pro", "reasoning": "high" },
+    "orchestrator": { "provider": "deepseek-pro", "reasoning": "max" },
+    "critic":       { "provider": "deepseek-pro" },
+    "review":       { "provider": "deepseek-pro" },
+    "summarizer":   { "provider": "deepseek" },
+    "subagent":     { "provider": "deepseek" },
+    "approval":     { "provider": "deepseek" }
+  },
+
+  "agents": {
+    "planner": {
+      "prompt": "You are a careful planner. Break the task into steps, then return the next action.",
+      "provider": "deepseek-pro",
+      "reasoning": "high",
+      "temperature": 0.2,
+      "allow_tools": ["run_shell"],
+      "description": "high-effort planner agent"
+    },
+    "reviewer": {
+      "prompt": "You are a diff reviewer. Report defects only.",
+      "provider": "deepseek-pro",
+      "reasoning": "medium",
+      "description": "read-only code reviewer"
+    }
+  },
+
+  "escalation": {
+    "max_repairs": 2,
+    "max_escalations": 1,
+    "breaker_threshold": 3,
+    "ladder": ["repair", "escalate", "orchestrator"]
+  },
+
+  "mounts": [
+    "~/.faraday:/home/sandbox/.faraday:ro",
+    "~/.nodecode:/home/sandbox/.nodecode:ro",
+    "~/projects:/home/sandbox/projects:ro"
+  ],
+
+  "proposer": { "provider": "deepseek", "model": "deepseek-flash" },
+  "chat":     { "provider": "deepseek", "model": "deepseek-flash", "wrap": 92 }
+}

@@ -9,20 +9,22 @@ nodecode's narrow-waist contracts and cells, samizdat's loop-as-data behind a va
 ## State today
 
 - The control plane is beta and works end to end: contracts, ledger, memo, pool, rap, fanout, core gate, console.
-- faraday/agent has a first loop: hardcoded Clojure driving a scripted agent's tool calls through rap. No manifest, no model step-fn, no memory, no :goal.
+- faraday/agent has loop-as-data: a manifest (scripted agent, declarative :goal, soak gate), a robust model step-fn (repair/escalate/circuit-break), and the launch/steer/observe harness over rap.
+- faraday/harness (new) is runnable: the harness DB (projects/scopes/hooks/hook_runs/tasks) plus the CLI (`jolt -M:harness`). `hook add` rejects hooks that cannot fail; `run` fires resolved scope hooks around a loop and finalizes the honesty invariant (expected⊆ran, blocking⊆pass). Per-cell hook firing still waits on the nREPL middleware spine.
+- faraday/harness/supervisor is the self-improvement gate: `faraday improve <task>` observes a loop-manifest run, proposes a data rewrite through the :proposer seam (default: a mechanical budget-relaxer; `--proposer model` swaps in faraday.harness.model-proposer, which asks a chat model for the rewrite), routes it through faraday.agent.loop/promote-loop! (validate + soak + rollback), persists the winner to the task, and records the attempt in supervisor_runs. An already-green loop reports :no-improvement; an unfixable failure reports :no-proposal rather than guessing.
 - jolt-lang ships jolt.nrepl, a minimal extensible nREPL server (bencode over loopback TCP). Its middleware is (fn [handler] (fn [request] ...)), listed under :nrepl/middleware in deps.edn — the same shape as the faraday loop stack. This is the platform the loop runs on.
 - dirge has plugins/nrepl: an agent tool nrepl_eval plus slash commands, delimiter repair, per-eval timeout + interrupt, lazy .nrepl-port discovery. This is the shape of faraday's self-modification channel.
 
 ## The machine in three rings
 
 Ring 1 — the moat. Agent-immutable. Already built.
-- faraday-contracts: the narrow waist, one define-contract per wire shape
-- faraday-ledger: append-only thread messages, per-thread seq, dedup
-- faraday-memo: content-addressed cache
-- faraday-pool: warm KVM microVMs over jolt-microvm + jolt-oci
-- faraday-rap: tool invocation server, streams terminal frames
-- faraday-fanout: thread-message fanout
-- faraday-core: the gate (budget admission + Cedar policy)
+- faraday/contracts: the narrow waist, one define-contract per wire shape
+- faraday/ledger: append-only thread messages, per-thread seq, dedup
+- faraday/memo: content-addressed cache
+- faraday/pool: warm KVM microVMs over jolt-microvm + jolt-oci
+- faraday/rap: tool invocation server, streams terminal frames
+- faraday/fanout: thread-message fanout
+- faraday/core: the gate (budget admission + Cedar policy)
 - egress (jolt-tapmasq + jolt-oci): the network boundary
 
 Ring 2 — the loop. Data that compiles to an nREPL server.
@@ -34,6 +36,7 @@ Ring 3 — the surface. Cells the operator and the agent use.
 - nREPL cell: inspect and steer the running loop (the loop's home)
 - provider cell: route main/critic/summarizer roles to models
 - memory cell: two-tier FTS5 memory + post-session orchestrator
+- taskboard cell: kanban + scope hooks; the entry point that turns a task into loop-as-data (SCHEMA.md)
 - console: observe and steer N agents
 - supervisor cell (MVP): watches runs, proposes rewrites through the same gate
 
@@ -73,6 +76,8 @@ Base handler: invoke one tool call through rap and wait for the terminal frame. 
 - wrap-repair: fix malformed tool calls, then validate, then circuit-break on a non-progressing loop (dirge)
 - wrap-permission: one decision point, op-based rules, a /why trace (dirge)
 - wrap-goal: an independent judge rules met/unmet at finalization; the reason re-enters the loop, bounded (dirge + MiMo-Code)
+- wrap-guardrails: run the scope's pre/post hooks (check/lint/slop-cop/fast-test/gate/contract/soak) around each cell; every run lands in hook_runs; expected ⊆ ran at finalization (dirge verification-discipline + the harness DB, SCHEMA.md)
+- wrap-taskboard: resolve a task's scope into loop-as-data, splice the task's manifest over the project default (SCHEMA.md)
 
 ## Build order
 
@@ -80,6 +85,9 @@ Phase 0 — contracts. Done. faraday.contracts define-contract is the narrow wai
 
 Phase 1 — loop-as-data + middleware spine (nc-96E4).
 Accept: run! is a manifest interpreter; the manifest is a contracts section; it compiles to a jolt.nrepl middleware chain; scripted-agent still passes; a manifest can be rewritten as data and gated by validate/soak/rollback.
+
+Phase 1b — harness DB + guardrail spine (SCHEMA.md).
+Accept: faraday.harness opens .faraday/harness.db (projects, scopes, hooks, hook_runs, tasks); task start resolves nested scope hooks into a reified :hooks map; every hook run lands in hook_runs; expected ⊆ ran at finalization; a hook that cannot fail is rejected at registration.
 
 Phase 2 — robust step-fn + provider roles (nc-A5BB).
 Accept: a model step-fn is interchangeable with scripted-agent; repair → validate → escalate → circuit-break shown on a weak model; role aliases route to different providers.
@@ -91,10 +99,21 @@ Phase 4 — :goal stop-condition (nc-F82A).
 Accept: run! honors a :goal predicate or command, stops when it passes, reports met/unmet; a mis-stated goal cannot spin forever.
 
 Phase 5 — operator harness + supervisor MVP (nc-B65C).
-Accept: launch N agents from the pool, hand them a shared goal, steer mid-run with directives and :goal, observe via ledger/memo/console; the supervisor cell watches runs and proposes rewrites through the gate.
+Accept: launch N agents from the pool via task start (the kanban resolves a task's scope into loop-as-data), hand them a shared goal, steer mid-run with directives and :goal, observe via ledger/memo/console and the board; the supervisor cell watches runs and proposes rewrites through the gate.
 
 Phase 6 — self-evolution (past MVP).
 The supervisor grows from proposer to applier; nREPL becomes the sole steering surface. Jujutsu eval lands here.
+
+## Guardrails + taskboard
+
+dirge's guardrails are its verification discipline: a check is only worth its verdict if you know what would make it say the other thing, and a gate that ran but left no record is trusted anyway. faraday reifies that discipline as its own harness DB (SCHEMA.md): scopes (a folder tree) carry nested pre/post hooks; each hook is how/where/why data; starting a task resolves its scope into a loop-as-data :hooks map; every run lands in hook_runs; and finalization fails the turn unless expected ⊆ ran.
+
+- dirge verification-discipline (project gate, claim/evidence, source, completeness) → faraday hook kinds check / gate / contract / soak plus the expected⊆ran honesty ledger
+- dirge vigils (trigger → rite gate → observance) → faraday gate hooks, minus the sleep/wake runtime (the supervisor's job later)
+- dirge content_guard (injection / exfil / invisible unicode) → faraday slop-cop hooks plus the narrow-waist contract check
+- dirge issue_db (epic_id, status, priority, session scoping) → faraday tasks table plus the kanban surface in Phase 5
+
+Hooks compose by nesting: a hook on src/ applies to src/db/ and below, shallowest first; deeper scopes add to their ancestors rather than replace them. A task's own manifest override splices last.
 
 ## VCS: forgejo now
 
@@ -108,7 +127,7 @@ faraday lives on github.com/racklr-dev/faraday (branch main, monorepo, :local/ro
 
 faraday owns the agent-harness business logic: the loop manifest, the step-fn, memory, goal, supervision, and the rap/ledger/memo/contracts moat. jolt-* libraries are utilities only — jolt-microvm, jolt-oci, jolt-tapmasq, and jolt.nrepl itself are dependencies, not homes for harness logic.
 
-Extract to a jolt-* library only when the piece is a self-contained utility that composes for the wider community (for example a generic nREPL middleware kit), never to make faraday's own logic reusable-by-default. If the extraction would drag faraday-specific contracts along, it stays in faraday.
+Extract to a jolt-* library only when the piece is a self-contained utility that composes for the wider community (for example a generic nREPL middleware kit), never to make faraday's own logic reusable-by-default. If the extraction would drag faraday/specific contracts along, it stays in faraday.
 
 ## License
 
@@ -120,8 +139,10 @@ faraday is EPL-2.0. Port nodecode mechanics freely (MIT). Take ideas and pattern
 2. Manifest home is classpath (agent/resources/manifests/) with a git-ignored .faraday/manifests/ override dir read first.
 3. The supervisor cell is in the MVP (Phase 5), as a proposer through the gate. Autonomous applying is later.
 4. Forgejo now, before Phase 1; jujutsu evaluated after Phase 1.
+5. The must-be-able-to-fail fixture is per-hook EDN inside how: `:fixture {:argv [..] :good ".." :bad ".."}` with the literal `{fixture}` token in the proof argv; the two verdicts must differ. The runtime `:command` and the proof `:fixture` are distinct fields.
 
 ## Still open
 
 - Which Forgejo host/instance is canonical, and whether the github mirror stays public.
 - Whether the compiled middleware chain is rebuilt per-run or cached by manifest hash.
+- Whether nested scope hooks compose additively (default) or a deeper scope may shadow an ancestor by (cell, position, kind).

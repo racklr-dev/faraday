@@ -1,0 +1,31 @@
+{:paths ["src"]
+
+ :deps {jolt-lang/db
+        {:git/url "https://github.com/jolt-lang/db"
+         :git/sha "b016f792d3b1856899686466ffb7fa00f686ed7a"}
+
+        jolt-lang/glimmer-tui
+        {:git/url "https://github.com/jolt-lang/glimmer-tui"
+         :git/sha "1824a2d1491d93722245c48b7e10f5f3ebb2a71a"}
+
+        racklr-dev/faraday-agent
+        {:local/root "../agent"}
+
+        racklr-dev/faraday-ledger
+        {:local/root "../ledger"}
+
+        racklr-dev/faraday-memo
+        {:local/root "../memo"}
+
+        racklr-dev/faraday-memory
+        {:local/root "../memory"}
+
+        racklr-dev/faraday-fanout
+        {:local/root "../fanout"}
+
+        racklr-dev/faraday-rap
+        {:local/root "../rap"}
+
+        racklr-dev/jolt-sandbox
+        {:git/url "https://github.com/racklr-dev/jolt-sandbox"
+         :git/sha "4fd937208b4bfe7b77fe51313d2fb578e6f5d69e"}}}

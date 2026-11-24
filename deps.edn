@@ -2,4 +2,7 @@
 
  :aliases
  {:serve {:extra-deps {racklr-dev/faraday-console {:local/root "console"}}
-          :main-opts ["-m" "faraday.console.main"]}}}
+          :main-opts ["-m" "faraday.console.main"]}
+
+  :harness {:extra-deps {racklr-dev/faraday-harness {:local/root "harness"}}
+            :main-opts ["-m" "faraday.harness.main"]}}}

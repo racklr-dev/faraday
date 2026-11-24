@@ -1,0 +1,16 @@
+#!/bin/sh
+# faraday - the harness CLI. Resolve the repo root (the dir holding this bin/)
+# and inject the :harness alias via -Sdeps with an absolute local/root, so
+# jolt resolves deps from any cwd without changing directory; the CLI's
+# project discovery then starts from the caller's cwd.
+SCRIPT=$0
+while [ -L "$SCRIPT" ]; do
+  LINK=$(readlink "$SCRIPT")
+  case "$LINK" in
+    /*) SCRIPT=$LINK ;;
+    *) SCRIPT=$(dirname "$SCRIPT")/$LINK ;;
+  esac
+done
+ROOT=$(CDPATH= cd -- "$(dirname -- "$SCRIPT")/.." && pwd)
+export FARADAY_HARNESS_DIR="$ROOT/harness"
+exec jolt -Sdeps "$(printf '{:aliases {:harness {:extra-deps {racklr-dev/faraday-harness {:local/root "%s/harness"}} :main-opts ["-m" "faraday.harness.main"]}}}' "$ROOT")" -M:harness -- "$@"

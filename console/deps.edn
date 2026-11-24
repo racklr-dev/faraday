@@ -1,7 +1,7 @@
 {:paths ["src" "assets"]
 
- :deps {jolt-lang/glimmer-datastar
-        {:git/url "https://github.com/jolt-lang/glimmer-datastar"
+ :deps {racklr-dev/glimmer-datastar
+        {:git/url "https://github.com/racklr-dev/glimmer-datastar"
          :git/sha "1ee12aaaf587c5fae22cb94747fe280c20e3380b"}
 
         jolt-lang/ring-chez-adapter
