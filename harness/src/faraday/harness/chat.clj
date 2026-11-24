@@ -226,6 +226,24 @@
         (try-cfg strong (str (repair-note) " Escalate: reason carefully."))
         "")))
 
+(defn- with-circuit-breaker
+  "Wrap a model `f` so N (default 3) consecutive give-ups (blank strings) open a
+  circuit: later calls short-circuit to a :done error instead of re-calling the
+  model. A non-blank result resets the failure count."
+  [breaker f]
+  (fn [x]
+    (if (:open? @breaker)
+      {:done (str "circuit open: " (:failures @breaker) " consecutive model failures")}
+      (let [res (f x)]
+        (if (and (string? res) (str/blank? res))
+          (let [n (inc (:failures @breaker))]
+            (swap! breaker assoc :failures n :open? (>= n 3))
+            (if (>= n 3)
+              {:done (str "circuit open after " n " model failures — could not answer")}
+              res))
+          (do (swap! breaker assoc :failures 0)
+              res))))))
+
 (defn run-turn!
   "Drive one agentic turn: loop model call -> tool exec until the model answers.
   opts: :call (fn messages -> content), :exec (fn name args -> result), :system,
@@ -375,7 +393,9 @@
         cfg (config/resolve-chat full-cfg opts)
         strong (config/resolve-provider full-cfg :deepseek-pro opts)
         wrap (wrap-width opts)
-        call (or (:call opts) #(model-step cfg strong %))
+        breaker (atom {:failures 0 :open? false})
+        call (or (:call opts)
+                 (with-circuit-breaker breaker #(model-step cfg strong %)))
         exec (or (:exec opts) host-exec)
         max-turns (or (:max-turns opts) 8)
         stores (:session opts)
