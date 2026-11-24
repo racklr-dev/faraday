@@ -32,7 +32,7 @@ own README with its API and status.
 
 ## Requirements
 
-- [jolt](https://github.com/jolt-lang/jolt) 0.8.28+ (the jolt-* substrate
+- [jolt](https://github.com/jolt-lang/jolt) 0.8.28+ (the jolt-* 
   declares `:jolt/min-version 0.8.28`)
 - To run real sandboxes: libkrun + libkrunfw, a writable `/dev/kvm`, and
   `ssh`/`ssh-keygen` on the host — see [pool](pool) and
@@ -69,5 +69,5 @@ EPL-2.0
 
 - [jolt-lang](https://github.com/jolt-lang/jolt) — the language and toolchain
 - [faraday-contracts](contracts/SPEC.md) — the wire spec every module implements
-- [jolt-microvm](https://github.com/racklr-dev/jolt-microvm) — the sandbox substrate
+- [jolt-microvm](https://github.com/racklr-dev/jolt-microvm) — the sandbox 
 - [libkrun](https://github.com/containers/libkrun) — the microVM runtime
