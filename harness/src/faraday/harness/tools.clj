@@ -6,6 +6,7 @@
 ;; .faraday/harness.db.
 (ns faraday.harness.tools
   (:require [faraday.harness :as h]
+            [faraday.pool :as pool]
             [clojure.string :as str]))
 
 (defn open
@@ -31,12 +32,32 @@
        (when-let [cmd (get-in hk [:how :command])]
          (str "  " (str/join " " cmd)))))
 
+(def read-only-tools
+  #{"board" "task_list" "task_show" "scope_list" "hook_list" "hooks_for" "pool_stats"})
+
 (defn dispatch
-  "Run a chat tool. `name` is a tool name; `args` is the :args map from the
-  model's {:tool-call ..}. Returns the run_shell-shaped result map."
-  [hd root name args]
-  (try
+  "Run a chat tool. `hd` is the harness DB, `root` the project root, `pool-handle`
+  the faraday pool handle (nil = pool tools unavailable), `name` the tool, and
+  `args` the :args map. Returns the run_shell result plus :progress? (true when
+  the tool advanced the goal, false for read-only tools or errors)."
+  [hd root pool-handle name args]
+  (let [base (try
     (case name
+      "pool_stats"
+      (if pool-handle
+        (ok (pr-str (pool/stats pool-handle)))
+        (err "pool is not open"))
+
+      "vm_start"
+      (if pool-handle
+        (let [n (max 1 (long (or (:n args) 1)))
+              image (:image args)]
+          (dotimes [_ n]
+            (let [h (pool/acquire pool-handle (if image {:image image} {}))]
+              (pool/release pool-handle h)))
+          (ok (pr-str (pool/stats pool-handle))))
+        (err "pool is not open"))
+
       "board"
       (let [p (current-project hd root)
             tasks (h/task-list hd (:id p))
@@ -96,7 +117,9 @@
 
       (err (str "unknown tool " (pr-str name))))
     (catch Exception e
-      (err (str (or (ex-message e) "tool failed"))))))
+      (err (str (or (ex-message e) "tool failed")))))]
+    (assoc base :progress? (and (= :ok (:status base))
+                                (not (contains? read-only-tools name))))))
 
 (defn- obj [props] {:type "object" :properties props})
 (defn- req [props required] (assoc (obj props) :required (vec required)))
@@ -108,6 +131,14 @@
     :desc "run a shell command in the sandbox (cwd = this project dir)"
     :args "{:argv [\"cmd\" \"arg\" ...]}"
     :parameters (req {:argv {:type "array" :items {:type "string"}}} ["argv"])}
+   {:name "pool_stats"
+    :desc "warm VM pool stats"
+    :args "{}"
+    :parameters (obj {})}
+   {:name "vm_start"
+    :desc "start (warm) N VMs in the pool"
+    :args "{:n 3}"
+    :parameters (obj {:n {:type "integer"} :image {:type "string"}})}
    {:name "board"
     :desc "kanban board grouped by status"
     :args "{}"

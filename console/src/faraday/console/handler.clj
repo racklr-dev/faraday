@@ -5,10 +5,12 @@
   (:require [clojure.string :as str]
             [clojure.java.io :as io]
             [jolt.datastar.core :as ds]
+            [jolt.datastar.edn :as de]
             [jolt.datastar.html :as h]
             [faraday.console.board :as board]
             [faraday.console.runtime :as rt]
-            [faraday.console.views :as views]))
+            [faraday.console.views :as views]
+            [faraday.console.views.glimmer :as views.glimmer]))
 
 (defonce runtime (atom nil))
 (defonce datastar-js (delay (slurp (io/resource "datastar.js"))))
@@ -69,14 +71,26 @@ footer{padding:8px 16px;font-size:11px;color:#8b949e}")
     [:body (ds/init-opts {:signals {:view "overview"}})
      (views/live-region b)]]))
 
+(defn wants-edn?
+  "True when this request wants the elements as EDN hiccup (a native glimmer
+  client) rather than HTML (the browser): Accept: application/edn, or
+  ?namespace=edn."
+  [req]
+  (or (str/includes? (str (get-in req [:headers "accept"])) "application/edn")
+      (= "edn" (get (query-params req) :namespace))))
+
 (defn handler [req]
   (if (:jolt.datastar/sse-request req)
-    {:status 200 :body (h/html (views/live-region @board/board))}
+    {:status 200 :body (if (wants-edn? req)
+                         (de/hiccup->edn (views.glimmer/live-region @board/board))
+                         (h/html (views/live-region @board/board)))}
     (case (:uri req)
       "/"
       {:status 200
-       :headers {"Content-Type" "text/html; charset=utf-8"}
-       :body (page @board/board)}
+       :headers {"Content-Type" (if (wants-edn? req) "application/edn; charset=utf-8" "text/html; charset=utf-8")}
+       :body (if (wants-edn? req)
+               (de/hiccup->edn (views.glimmer/live-region @board/board))
+               (page @board/board))}
 
       "/assets/datastar.js"
       {:status 200

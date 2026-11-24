@@ -72,19 +72,28 @@
   "Turn conversation entries into OpenAI chat messages. Entries use the chat's
   own roles (:user :assistant :tool-call :tool-result); a tool-call becomes an
   assistant turn carrying the EDN the model emitted, and a tool-result becomes
-  a user turn describing what the tool did."
-  [system entries]
-  (into [{:role "system" :content system}]
-        (mapcat
-         (fn [e]
-           (case (:role e)
-             :user [{:role "user" :content (:text e)}]
-             :assistant [{:role "assistant" :content (:text e)}]
-             :tool-call [{:role "assistant"
-                          :content (pr-str {:tool-call {:name (:name e) :args (:args e)}})}]
-             :tool-result [{:role "user" :content (format-tool-result e)}]
-             [{:role "user" :content (str (:text e))}]))
-         entries)))
+  a user turn describing what the tool did. opts: :context-budget (default 40) caps
+  the transcript entries sent; older ones are folded into a single summary so a
+  long conversation stays inside the model's window and the prefix stays cache-
+  friendly."
+  [system entries & {:keys [context-budget] :or {context-budget 40}}]
+  (let [n (count entries)
+        entries (if (> n context-budget)
+                  (let [dropped (- n context-budget)]
+                    (into [{:role :user :text (str "(earlier conversation folded: " dropped " entries)")}]
+                          (drop dropped entries)))
+                  entries)]
+    (into [{:role "system" :content system}]
+          (mapcat
+           (fn [e]
+             (case (:role e)
+               :user [{:role "user" :content (:text e)}]
+               :assistant [{:role "assistant" :content (:text e)}]
+               :tool-call [{:role "assistant"
+                            :content (pr-str {:tool-call {:name (:name e) :args (:args e)}})}]
+               :tool-result [{:role "user" :content (format-tool-result e)}]
+               [{:role "user" :content (str (:text e))}]))
+           entries))))
 
 (defn parse-action
   "The EDN action a model content string carries, or nil when it is plain text."
@@ -206,18 +215,24 @@
 (defn run-turn!
   "Drive one agentic turn: loop model call -> tool exec until the model answers.
   opts: :call (fn messages -> content), :exec (fn name args -> result), :system,
-  :max-turns. Appends entries to `state` and clears :busy?; on a fault sets
-  :error. Safe to run on a worker thread (only ratom swaps, no widget touches)."
+  :max-turns, :max-stall (consecutive no-progress tool steps before stopping).
+  Appends entries to `state` and clears :busy?; on a fault or stall sets :error.
+  Safe to run on a worker thread (only ratom swaps, no widget touches)."
   [opts state entries]
-  (let [{:keys [call exec system max-turns]} opts
+  (let [{:keys [call exec system max-turns max-stall]} opts
+        max-stall (or max-stall 3)
         run-one (fn [name args]
-                  (let [res (exec name args)]
+                  (let [res (exec name args)
+                        progress? (if (contains? res :progress?)
+                                    (:progress? res)
+                                    (= :ok (:status res)))]
                     [{:role :tool-call :name name :args args}
                      {:role :tool-result :name name
                       :status (:status res)
                       :exit (:exit res)
                       :text (or (:stdout res) (:stderr res) "")
-                      :error (:error res)}]))
+                      :error (:error res)
+                      :progress? progress?}]))
         step! (fn [es]
                 (let [resp (call (build-messages system es))
                       action (if (string? resp) (parse-action resp) resp)
@@ -231,7 +246,8 @@
                     (seq tcs)
                     (let [entries (vec (mapcat (fn [tc] (run-one (:name tc) (:args tc))) tcs))]
                       (swap! state update :messages into entries)
-                      {:cont (into es entries)})
+                      {:cont (into es entries)
+                       :progress? (boolean (some :progress? entries))})
 
                     ;; done: render the answer and stop
                     (and action (:done action))
@@ -246,16 +262,25 @@
                       (swap! state update :messages conj {:role :assistant :text (str (or resp ""))})
                       :done))))]
     (loop [left (or max-turns 8)
+           stall 0
            es entries]
-      (if (zero? left)
+      (cond
+        (zero? left)
         (swap! state assoc :busy? false :error "max tool turns reached")
+
+        (>= stall max-stall)
+        (swap! state assoc :busy? false :error "no progress — stopping")
+
+        :else
         (let [outcome (try (step! es)
                            (catch Exception e
                              {:fault (or (ex-message e) "turn failed")}))]
           (cond
             (:fault outcome) (swap! state assoc :busy? false :error (:fault outcome))
             (= :done outcome) (swap! state assoc :busy? false)
-            (:cont outcome)  (recur (dec left) (:cont outcome))
+            (:cont outcome)  (recur (dec left)
+                                    (if (:progress? outcome) 0 (inc stall))
+                                    (:cont outcome))
             :else            (swap! state assoc :busy? false)))))))
 
 ;; -- the UI -------------------------------------------------------------------
@@ -301,6 +326,30 @@
                  92)]
     (max 24 (- (long cols) 8))))
 
+(defn- markdown-lines
+  "Split assistant markdown into [[kind text] ...], kind :text/:code/:heading.
+  A simple highlighter: code fences toggle :code, #-lines are :heading, ** is
+  stripped (inline bold is left to a richer renderer later)."
+  [text]
+  (let [in-code (volatile! false)]
+    (vec
+     (mapcat
+      (fn [line]
+        (let [t (str/trim line)]
+          (cond
+            (str/starts-with? t "```")
+            (do (vreset! in-code (not @in-code)) [])
+
+            @in-code
+            [[:code line]]
+
+            (str/starts-with? t "#")
+            [[:heading (str/trim (str/replace t #"^#+\s*" ""))]]
+
+            :else
+            [[:text (str/replace line #"\*\*(.+?)\*\*" "$1")]])))
+      (str/split-lines (str text))))))
+
 (defn chat-app
   "The agentic chat component. `opts` accepts :system, :wrap, :model, :base-url,
   :api-key (the latter three override config/resolve-chat), :max-turns, and the
@@ -314,10 +363,15 @@
         wrap (wrap-width opts)
         call (or (:call opts) #(model-step cfg strong %))
         exec (or (:exec opts) host-exec)
-        system (or (:system opts) agentic-system)
         max-turns (or (:max-turns opts) 8)
         stores (:session opts)
         thread-id (:thread-id opts)
+        facts (when (and stores thread-id)
+                (try (session/salient stores thread-id) (catch Exception _ nil)))
+        system (let [base (or (:system opts) agentic-system)]
+                 (if (seq facts)
+                   (str base "\n\nYou remember these facts from earlier sessions:\n" (pr-str facts))
+                   base))
         resumed (when (and stores thread-id)
                   (try (session/resume stores thread-id) (catch Exception _ nil)))
         state (r/atom {:messages (or resumed []) :busy? false :error nil})
@@ -326,14 +380,16 @@
         (fn []
           (mapcat (fn [{:keys [role text name args] :as e}]
                     (case role
-                      :user (map (fn [line] [role line]) (word-wrap text wrap))
-                      :assistant (map (fn [line] [role line]) (word-wrap text wrap))
-                      :tool-call (map (fn [line] [role line])
+                      :user (map (fn [line] [role :text line]) (word-wrap text wrap))
+                      :assistant (mapcat (fn [[kind line]]
+                                           (map (fn [wl] [role kind wl]) (word-wrap line wrap)))
+                                         (markdown-lines text))
+                      :tool-call (map (fn [line] [role :text line])
                                       (word-wrap (str "$" (when (seq args)
                                                              (str " " (str/join " " (map str args))))) wrap))
-                      :tool-result (map (fn [line] [role line])
+                      :tool-result (map (fn [line] [role :text line])
                                         (word-wrap (format-tool-result (select-keys e [:name :status :exit :error :text])) wrap))
-                      (map (fn [line] [role line]) (word-wrap (str text) wrap))))
+                      (map (fn [line] [role :text line]) (word-wrap (str text) wrap))))
                   (:messages @state)))
         send!
         (fn []
@@ -359,7 +415,7 @@
            (into [:vbox {:spacing 0 :margin 0}]
                  (if (empty? lines)
                    [[:label {:label "Type a task; faraday runs tools and answers. ctrl-c quits." :dim true}]]
-                   (for [[role line] lines]
+                   (for [[role kind line] lines]
                      [:label {:label (condp = role
                                        :user (str "you> " line)
                                        :tool-call (str "  → " line)
@@ -367,9 +423,13 @@
                                        line)
                               :color (case role
                                        :user :bright-green
-                                       :assistant :default
+                                       :assistant (case kind
+                                                    :code :bright-black
+                                                    :heading :bright-cyan
+                                                    :default)
                                        :tool-call :bright-cyan
                                        :tool-result :bright-black)
+                              :bold (or (= kind :heading) (= role :user))
                               :dim (= role :tool-result)}])))]]
          (when error
            [:label {:label (str "  " error) :color :bright-red :margin [0 1]}])
@@ -437,14 +497,10 @@
                      {}
                      colls))))
 
-(defn cmd-chat
-  "Run the agentic chat TUI. Flags: --model M, --base-url U, --system S, --wrap N,
-  --max-turns N, --exec sandbox|shell (default sandbox: tools run in a
-  jolt-microvm with the cwd volume-mounted at /workspace; shell runs on the
-  host), --thread ID (session identity; default chat-YYYYMMDD so a day's
-  conversation resumes), and repeatable --mount host:guest[:ro|rw] for extra
-  virtiofs mounts (ro by default). Mounts merge by host path: built-in
-  config/auth mounts < settings.json :mounts < --mount flags."
+(defn setup-chat
+  "Build the chat opts + cleanup handles from flags. Returns {:opts :thread-id
+  :close}. faraday.harness.console embeds these same opts in the chat mode, so
+  this is the single place the chat's sandbox/tools/session are wired."
   [args]
   (let [flags (chat-flags args)
         exec-mode (or (:exec flags) "sandbox")
@@ -459,10 +515,11 @@
                                          :mounts mounts}))
         shell-exec (if sandbox (:exec sandbox) host-exec)
         hd (delay (try (tools/open root) (catch Exception _ nil)))
+        pool-ref (atom nil)
         exec (fn [name args]
                (if (contains? #{"run_shell" "shell" "exec"} name)
                  (shell-exec name args)
-                 (tools/dispatch @hd root name args)))
+                 (tools/dispatch @hd root @pool-ref name args)))
         opts (cond-> {:exec exec :session @stores :thread-id thread-id}
                (:model flags) (assoc :model (:model flags))
                (:base-url flags) (assoc :base-url (:base-url flags))
@@ -474,13 +531,26 @@
       (throw (ex-info (str "no LLM API key for chat; set FARADAY_LLM_API_KEY or "
                            "DEEPSEEK_API_KEY, or seed ~/.faraday/settings.json")
                       {})))
+    {:opts opts
+     :thread-id thread-id
+     :pool-ref pool-ref
+     :close (fn []
+              (when sandbox ((:close sandbox)))
+              (when @stores
+                (try (session/close! @stores thread-id) (catch Exception _ nil))))}))
+
+(defn cmd-chat
+  "Run the operator console, chat mode first (delegates to
+  faraday.harness.console/run!). Flags as before: --model, --base-url, --system,
+  --wrap, --max-turns, --exec sandbox|shell, --thread ID, --mount host:guest[:ro|rw]."
+  [args]
+  (let [{:keys [opts close thread-id pool-ref]} (setup-chat args)]
     (if-not (tui/usable-terminal?)
       (println "faraday chat needs a real terminal (stdin/stdout are not a tty).")
       (do
-        (ui/run (chat-app opts))
-        (when sandbox ((:close sandbox)))
-        (when @stores
-          (try (session/close! @stores thread-id) (catch Exception _ nil)))
+        ((requiring-resolve 'faraday.harness.console/run!)
+         {:chat-opts opts :initial-view "chat" :pool-ref pool-ref})
+        (close)
         (println "bye — resume with:")
         (println (str "  faraday chat"
                       (when (seq args) (str " " (str/join " " args)))

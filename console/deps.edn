@@ -1,14 +1,17 @@
 {:paths ["src" "assets"]
 
  :deps {racklr-dev/glimmer-datastar
-        {:git/url "https://github.com/racklr-dev/glimmer-datastar"
-         :git/sha "1ee12aaaf587c5fae22cb94747fe280c20e3380b"}
+        {:local/root "../../glimmer-datastar"}
 
         jolt-lang/ring-chez-adapter
         {:git/url "https://github.com/jolt-lang/ring-chez-adapter"
          :git/sha "387cf67ea7b6a8573c6ee6abca6026a45bc3b6bf"}
 
         racklr-dev/faraday-core
-        {:local/root "../core"}}
+        {:local/root "../core"}
+
+        jolt-lang/glimmer-tui
+        {:git/url "https://github.com/jolt-lang/glimmer-tui"
+         :git/sha "1824a2d1491d93722245c48b7e10f5f3ebb2a71a"}}
 
  :aliases {:serve {:main-opts ["-m" "faraday.console.main"]}}}

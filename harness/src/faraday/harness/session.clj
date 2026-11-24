@@ -53,6 +53,11 @@
   [stores thread-id]
   (memory/restore (:memory stores) thread-id))
 
+(defn salient
+  "The remembered (salient) facts for thread-id: a map fact-key -> value."
+  [stores thread-id]
+  (memory/salient (:memory stores) thread-id))
+
 (defn history
   "The thread's ledger history (transcript entries in order)."
   [stores thread-id]

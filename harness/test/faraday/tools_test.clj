@@ -22,7 +22,7 @@
 (def p (h/project-add! hd {:root-path root :name "t" :default-manifest "default"}))
 (h/scope-add! hd {:project-id (:id p) :rel-path "src" :is-root false})
 
-(defn call [name & [args]] (tools/dispatch hd root name (or args {})))
+(defn call [name & [args]] (tools/dispatch hd root nil name (or args {})))
 
 (check "board starts empty"
        "open (0)\nin_progress (0)\nblocked (0)\ndone (0)\ncancelled (0)"

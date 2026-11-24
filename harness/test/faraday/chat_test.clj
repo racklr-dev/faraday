@@ -61,6 +61,16 @@
        {:done "ok"}
        (chat/parse-action "```clojure\n{:done \"ok\"}\n```"))
 
+;; -- markdown highlighter --------------------------------------------------------
+(let [md #'chat/markdown-lines]
+  (check "md: heading" [:heading "Title"] (first (md "# Title")))
+  (check "md: code fence" [:code "x"] (first (md "```\nx\n```")))
+  (check "md: bold stripped" [:text "hello world"] (first (md "**hello** world"))))
+
+(let [msgs (chat/build-messages "S" (vec (repeat 45 {:role :user :text "hi"})) :context-budget 40)]
+  (check "folding prepends a summary" true (str/includes? (:content (second msgs)) "folded"))
+  (check "folding caps the transcript" 42 (count msgs)))
+
 ;; -- the component, headless -----------------------------------------------------
 (defn- find-widget [tag w]
   (when w
