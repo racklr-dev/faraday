@@ -951,6 +951,23 @@
         model (or (:model cfg) "faraday")
         expanded (r/atom #{})
         copied (r/atom nil)
+        hist-idx (r/atom nil)
+        user-texts
+        (fn [] (vec (keep (fn [e] (when (= :user (:role e)) (:text e))) (:messages @state))))
+        recall!
+        (fn [dir]
+          (let [texts (user-texts)
+                n (count texts)]
+            (when (pos? n)
+              (case dir
+                :prev (let [i (if (nil? @hist-idx) (dec n) (max 0 (dec @hist-idx)))]
+                        (reset! hist-idx i)
+                        (reset! draft (get texts i)))
+                :next (when (some? @hist-idx)
+                        (let [i (inc @hist-idx)]
+                          (if (>= i n)
+                            (do (reset! hist-idx nil) (reset! draft ""))
+                            (do (reset! hist-idx i) (reset! draft (get texts i))))))))))
         copy-last-answer!
         (fn []
           (let [text (or (last (keep (fn [e] (when (= :assistant (:role e)) (:text e))) (:messages @state)))
@@ -964,6 +981,7 @@
           (let [text (str/trim (str @draft))]
             (when (and (seq text) (not (:busy? @state)))
               (reset! draft "")
+              (reset! hist-idx nil)
               (scroll-to-bottom!)
               ((:send! sess) text))))]
     (fn []
@@ -971,9 +989,10 @@
             last-assistant-idx (last (keep-indexed (fn [i e] (when (= :assistant (:role e)) i)) messages))]
         [:vbox {:spacing 0 :margin [0 1 0 1]
                 :on-key (fn [ev]
-                          (when (k/match? ev "ctrl+y")
-                            (copy-last-answer!)
-                            true))}
+                          (cond
+                            (k/match? ev "ctrl+y") (do (copy-last-answer!) true)
+                            (k/match? ev "ctrl+p") (do (recall! :prev) true)
+                            (k/match? ev "ctrl+n") (do (recall! :next) true)))}
          [:scroll {:orientation :vertical :vexpand true}
           (into [:vbox {:spacing 0 :padding [1 2 1 1]}]
                 (if (empty? messages)
@@ -984,10 +1003,14 @@
             [:spinner {:tick @tick :label "working" :color (:tool pal)}]
             [:label {:label "● ready" :color (:assistant pal) :bold true}])
           [:label {:label (str "model " model) :color (:muted pal) :dim true}]
-          [:label {:label (or @copied "ctrl+c quit · ctrl+y copy · tab folds · enter open")
-                   :color (if @copied (:assistant pal) (:muted pal))
-                   :dim (not @copied)
-                   :halign :end :hexpand true}]]
+          (let [recall-hint (when (some? @hist-idx)
+                              (str "recall " (inc @hist-idx) "/" (count (user-texts))
+                                   " · ctrl+n newer · ctrl+p older"))]
+            [:label {:label (or @copied recall-hint
+                                "ctrl+c quit · ctrl+y copy · ctrl+p/n recall · tab folds · enter open")
+                     :color (if (or @copied recall-hint) (:assistant pal) (:muted pal))
+                     :dim (not (or @copied recall-hint))
+                     :halign :end :hexpand true}])]
          (when error
            [:label {:label (str "⚠ " error) :color (:danger pal)}])
          [:hbox {:bg (:composer pal) :hexpand true :spacing 1

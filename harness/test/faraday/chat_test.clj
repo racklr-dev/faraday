@@ -114,6 +114,35 @@
     (check "transcript shows the final answer" true (str/includes? text "did it"))
     (check "two model calls (tool then done)" 2 (count @calls))
     (check "draft cleared after send" "" (get-in @(find-widget :entry root) [:props :text])))
+
+;; -- composer recall: ctrl+p/n walk past user prompts ------------------------
+(let [fake-call (fn [_] "{:done \"ok\"}")
+      fake-exec (fn [_ _] {:status :ok :exit 0 :stdout ""})
+      app (chat/chat-app {:call fake-call :exec fake-exec :wrap 40})
+      root (w/node :window {})
+      screen (scr/buffer-screen 60 20)
+      entry-text (fn [] (get-in @(find-widget :entry root) [:props :text]))]
+  (tui/attach! root screen)
+  (ui/mount root :window [app])
+  (tui/frame!)
+  (doseq [c (map int "one")] (tui/press! c))
+  (tui/press! 10)
+  (Thread/sleep 150) (tui/drain!) (tui/frame!)
+  (doseq [c (map int "two")] (tui/press! c))
+  (tui/press! 10)
+  (Thread/sleep 150) (tui/drain!) (tui/frame!)
+  (check "composer empty after two sends" "" (entry-text))
+  (tui/press! 16) (tui/drain!) (tui/frame!)
+  (check "ctrl+p recalls the latest prompt" "two" (entry-text))
+  (tui/press! 16) (tui/drain!) (tui/frame!)
+  (check "ctrl+p again recalls the previous prompt" "one" (entry-text))
+  (tui/press! 16) (tui/drain!) (tui/frame!)
+  (check "ctrl+p at oldest prompt stays" "one" (entry-text))
+  (tui/press! 14) (tui/drain!) (tui/frame!)
+  (check "ctrl+n returns to the newer prompt" "two" (entry-text))
+  (tui/press! 14) (tui/drain!) (tui/frame!)
+  (check "ctrl+n past newest clears the composer" "" (entry-text)))
+
 ;; -- fatal tool errors stop the turn -----------------------------------------
 (check "group-members parses /etc/group"
        #{"jm" "bob"}
