@@ -7,7 +7,7 @@
 ;; safely. The durable body of each message is the canonical wire JSON (string
 ;; keys), read back as keyword-keyed maps.
 (ns faraday.ledger
-  "Durable, idempotent thread state for the jolt control plane.
+  "Durable, idempotent thread state for a jolt-based control plane.
 
   The ledger is the single writer for Thread Messages (faraday-contracts
   SPEC.md §1): it assigns each message a per-thread monotonic seq,

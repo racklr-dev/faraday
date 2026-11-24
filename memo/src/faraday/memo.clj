@@ -1,6 +1,6 @@
 ;; faraday-memo: content-addressed result cache.
 (ns faraday.memo
-  "Content-addressed result cache for the jolt control plane.
+  "Content-addressed result cache for a jolt-based control plane.
 
   A memo maps the canonical content hash of a value to that value, so
   identical inputs produce one stored copy. faraday-fanout uses it behind a

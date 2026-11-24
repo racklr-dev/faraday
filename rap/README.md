@@ -1,6 +1,6 @@
 # faraday-rap — RAP tool server + MCP adapter
 
-The RAP tool server and MCP adapter for the jolt control plane: it runs Tool
+The RAP tool server and MCP adapter for a jolt-based control plane: it runs Tool
 Invocations ([faraday-contracts](../contracts/SPEC.md) §3) against a
 [faraday-pool](../pool), streams results to subscribers, and adapts them to
 MCP. Each invocation has exactly one terminal result, keyed by `call-id`.

@@ -7,7 +7,7 @@
 ;; on-result may register against a call-id before it has been invoked; those
 ;; land in a pending map and attach when invoke creates the call.
 (ns faraday.rap
-  "RAP tool server and MCP adapter for the jolt control plane.
+  "RAP tool server and MCP adapter for a jolt-based control plane.
 
   Runs Tool Invocations (faraday-contracts SPEC.md §3) against a faraday-pool,
   streams results to subscribers, and adapts them to MCP. Each invocation has

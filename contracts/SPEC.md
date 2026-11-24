@@ -1,7 +1,7 @@
 # faraday data contracts — canonical wire spec
 
 Version 1.0. This document is the single pin for every data shape that crosses a
-component boundary in the jolt control plane. Each library owns its logic; this
+component boundary in a jolt-based control plane. Each library owns its logic; this
 file owns the bytes between libraries.
 
 ## Conventions

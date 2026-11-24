@@ -1,6 +1,6 @@
 # faraday-ledger — durable idempotent thread state
 
-The single writer for Thread Messages in the jolt control plane: it assigns
+The single writer for Thread Messages in a jolt-based control plane: it assigns
 each message a per-thread monotonic `seq`, dedups on `msg-id`, and answers
 history / processed / last-seq queries. Storage is delegated to
 [jolt-lang/db](https://github.com/jolt-lang/db) (SQLite).

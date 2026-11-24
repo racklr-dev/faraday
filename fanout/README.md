@@ -1,6 +1,6 @@
 # faraday-fanout — task fanout runtime
 
-The task fanout runtime for the jolt control plane: it emits Thread Messages
+The task fanout runtime for a jolt-based control plane: it emits Thread Messages
 ([faraday-contracts](../contracts/SPEC.md) §1) into a
 [faraday-ledger](../ledger), with an optional Cedar policy hook that can veto
 an emit before it is appended.

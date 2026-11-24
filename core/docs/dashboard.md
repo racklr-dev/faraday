@@ -9,7 +9,7 @@ build step.
 
 - **Datastar** is a hypermedia framework: the server streams HTML fragments and
   reactive signals over SSE (`text/event-stream`), and the browser applies them
-  with `data-*` attributes. State lives in one place — the jolt daemon — so the
+  with `data-*` attributes. State lives in one place — the control-plane daemon — so the
   dashboard cannot drift from the plane.
 - **Rocket** (Datastar's web-component API) defines custom elements
   (`rocket('agent-node', …)`) with typed props, so each node/panel is a

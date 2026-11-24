@@ -1,6 +1,6 @@
 # faraday-memo — content-addressed result cache
 
-A content-hash-keyed cache for the jolt control plane: it maps the canonical
+A content-hash-keyed cache for a jolt-based control plane: it maps the canonical
 content hash of a value to that value, so identical inputs share one stored
 copy. faraday-fanout uses it behind a Thread Message's optional `memo-key`
 ([faraday-contracts](../contracts/SPEC.md) §1) to skip recomputing a spawn

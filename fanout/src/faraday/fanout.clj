@@ -5,7 +5,7 @@
 ;; parent-id links it into the tree; report/yield append into an existing
 ;; thread-id. The runtime never closes the ledger/memo it was given.
 (ns faraday.fanout
-  "Task fanout runtime for the jolt control plane.
+  "Task fanout runtime for a jolt-based control plane.
 
   A runtime emits Thread Messages (faraday-contracts SPEC.md §1) into a
   faraday-ledger, with an optional cedar policy hook that can veto an emit

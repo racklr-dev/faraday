@@ -1,4 +1,4 @@
-;; faraday.agent — the agent framework for the jolt control plane.
+;; faraday.agent — the agent framework for a jolt-based control plane.
 ;; An agent is a step fn of the context; the framework executes every tool-call
 ;; it returns as a Tool Invocation through faraday-rap (SPEC sec 3), waits for
 ;; the single terminal frame, appends call+result to the transcript, and loops

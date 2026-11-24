@@ -5,7 +5,7 @@
 ;; repair guidance), then escalates to a stronger provider role, then
 ;; circuit-breaks so a weak model cannot spin the loop forever.
 (ns faraday.agent.model
-  "Robust model step-fn for the jolt control plane.
+  "Robust model step-fn for a jolt-based control plane.
 
   A model-agent is a step fn interchangeable with scripted-agent: it turns the
   loop context into {:tool-call ..} or {:done ..} by calling a model through a

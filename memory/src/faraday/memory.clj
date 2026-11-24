@@ -6,7 +6,7 @@
 ;; orchestrator: it pulls learnings out of a thread's history into salient
 ;; facts.
 (ns faraday.memory
-  "Two-tier agent memory for the jolt control plane.
+  "Two-tier agent memory for a jolt-based control plane.
 
   Salient facts stay inline (the working set an agent carries in context); the
   rest demote to a breadcrumb index — compact pointers back to the full record.

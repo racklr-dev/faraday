@@ -1,6 +1,6 @@
 # faraday-contracts — the narrow waist
 
-The canonical data contracts for the jolt control plane. `SPEC.md` is the
+The canonical data contracts for a jolt-based control plane. `SPEC.md` is the
 single pin for every data shape that crosses a component boundary; the
 `faraday.contracts` namespace is its executable form: each shape is declared
 once with `define-contract`, and the decoder, encoder and JSON-Schema

@@ -7,7 +7,7 @@
 ;; Request is faraday-contracts SPEC.md §2; the pool owns VM lifecycle only:
 ;; running the request argv is the caller's job via (jolt.microvm/exec ...).
 (ns faraday.pool
-  "Warm VM pool and snapshot hibernate for the jolt control plane.
+  "Warm VM pool and snapshot hibernate for a jolt-based control plane.
 
   The pool hands out warm microVMs (jolt-microvm) from jolt-oci images,
   reuses released ones (LRU across the warm set), and hibernates idle

@@ -7,7 +7,7 @@
 ;; is its inverse, producing the string-keyed wire object. A field that fails
 ;; yields a refusal map, not a throw; decode!/encode! throw on refusal.
 (ns faraday.contracts
-  "Declared data contracts for the jolt control plane.
+  "Declared data contracts for a jolt-based control plane.
 
   One declaration per wire shape. define-contract states the members, their
   types and invariants ONCE; the decoder, encoder and JSON-Schema projection

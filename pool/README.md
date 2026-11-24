@@ -1,6 +1,6 @@
 # faraday-pool — warm VM pool + snapshot hibernate
 
-A warm pool of microVMs for the jolt control plane: it hands out sandboxes
+A warm pool of microVMs for a jolt-based control plane: it hands out sandboxes
 from [jolt-microvm](https://github.com/racklr-dev/jolt-microvm) images resolved
 by [jolt-oci](https://github.com/racklr-dev/jolt-oci), reuses released ones
 (LRU), and hibernates idle sandboxes to snapshots that can be restored later.

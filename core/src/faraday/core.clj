@@ -1,6 +1,6 @@
 ;; faraday-core: control-plane daemon — budget + policy in one gate.
 (ns faraday.core
-  "Control-plane daemon for the jolt plane. One gate that authorizes a sandbox
+  "Control-plane daemon for a jolt-based plane. One gate that authorizes a sandbox
   run with the Cedar policy engine (jolt.cedar, SPEC section 6) and only then
   admits it under a resource budget (jolt.admission, SPEC section 5).
 
