@@ -35,7 +35,7 @@
 (s/persist! stores tid msgs)
 (check "history stays single copy after re-persist" 4 (count (s/history stores tid)))
 
-(check-true "default-thread-id is stable" (= (s/default-thread-id) (s/default-thread-id)))
+(check "default-thread-id is fresh per call" false (= (s/default-thread-id) (s/default-thread-id)))
 
 (let [learnings (s/close! stores tid)]
   (check-true "extract records message-count" (contains? learnings :message-count))

@@ -21,10 +21,10 @@
     {:ledger l :memo m :memory mem :dir dir}))
 
 (defn default-thread-id
-  "A stable-per-day thread id, so the operator's daily session resumes by
-  default until they pass an explicit --thread."
+  "A fresh thread id per invocation. Run faraday chat without --thread and you
+  get a new conversation; pass --thread <id> (printed on exit) to resume one."
   []
-  (str "chat-" (clojure.string/replace (str (java.time.LocalDate/now)) "-" "")))
+  (str "chat-" (java.util.UUID/randomUUID)))
 
 (defn- entry->msg [thread-id idx e]
   {:v 1
