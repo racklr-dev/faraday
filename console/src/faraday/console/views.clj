@@ -12,7 +12,7 @@
    ["egress" "Egress"]
    ["bench" "Benchmarks"]])
 
-(declare dry-result thread-detail)
+(declare dry-result thread-detail dry-btn)
 
 (defn- pct [used budget]
   (if (and budget (pos? budget)) (min 100 (int (* 100.0 (/ used budget)))) 0))
@@ -71,7 +71,17 @@
             [:td (:request-id g)] [:td (:principal g)]
             [:td {:class (str "d " (:decision g))} (:decision g)]])]]]]
      [:div {:class "card"}
+      [:h3 "Faults"]
+      (if (seq (:faults b))
+        (for [f (take 6 (:faults b))]
+          [:p {:id (str "fault-" (:ts f))}
+           (:agent f) " · " [:span {:class "d error"} (:error f)]])
+        [:p "none — sandbox healthy"])]
+     [:div {:class "card"}
       [:h3 "Live runs"]
+      [:div {:class "row"}
+       [dry-btn "▶ echo hi (alice)" "/run?agent=alice&argv=echo+hi"]
+       [dry-btn "▶ uname -a (bob)" "/run?agent=bob&argv=uname+-a"]]
       (if (seq live)
         (for [c live]
           [:p {:id (str "live-" (:call-id c))} (:display-as c)])

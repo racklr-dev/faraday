@@ -11,7 +11,6 @@
         {:local/root "../core"}
 
         jolt-lang/glimmer-tui
-        {:git/url "https://github.com/jolt-lang/glimmer-tui"
-         :git/sha "1824a2d1491d93722245c48b7e10f5f3ebb2a71a"}}
+        {:local/root "../../glimmer-tui"}}
 
  :aliases {:serve {:main-opts ["-m" "faraday.console.main"]}}}

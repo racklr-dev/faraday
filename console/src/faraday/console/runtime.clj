@@ -65,10 +65,17 @@
                    (let [info (get @calls (:request-id request))
                          request (cond-> request
                                    (:owner info) (assoc :owner (:owner info))
-                                   (:parent-id info) (assoc :parent-id (:parent-id info)))
-                         result (plane/run-sandbox! runner request)]
-                     (when-let [cb (:on-run opts)] (cb info result))
-                     result))
+                                   (:parent-id info) (assoc :parent-id (:parent-id info)))]
+                     (try
+                       (let [result (plane/run-sandbox! runner request)]
+                         (when-let [cb (:on-run opts)] (cb info result))
+                         result)
+                       (catch Exception e
+                         (let [msg (or (.getMessage e) (str e))
+                               result {:status :error :error msg :fatal? true}]
+                           (when-let [f (:on-fault opts)] (f info msg))
+                           (when-let [cb (:on-run opts)] (cb info result))
+                           result)))))
         srv (rap/new-server {:fanout fan :run-hook run-hook})]
     {:plane plane :pool pl :fanout fan :ledger db :runner runner :rap srv
      :root root :calls calls :policies policies :egress egresses :image image}))

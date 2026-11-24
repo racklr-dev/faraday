@@ -1,4 +1,4 @@
-;; faraday-console entrypoint: open the real plane stack (no KVM), sample it
+;; faraday-console entrypoint: open the real plane stack (real KVM boundary), sample it
 ;; into the board ratom, drive a rotating demo through the RAP run-hook so
 ;; every view has live data, and serve the Datastar UI over ring-chez-adapter.
 (ns faraday.console.main
@@ -46,7 +46,8 @@
 (defn -main [& args]
   (if (some #{"tui" "--tui"} args)
     (tui/run!)
-    (let [runtime (rt/open-runtime! {:on-run board/record-run!})]
+    (let [runtime (rt/open-runtime! {:on-run board/record-run!
+                                     :on-fault board/record-fault!})]
     (reset! handler/runtime runtime)
     (board/seed-config! runtime)
     (board/sample! runtime)

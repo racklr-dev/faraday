@@ -7,8 +7,8 @@ feeds the result back for the next step — until the agent finishes, the turn
 budget is spent, or a step errors.
 
 The agent itself is a plain step function; faraday.agent owns the loop, the
-thread, and the transcript. Any agent — a scripted sequence, a model-backed
-planner, or dsh-superagent's subprocess backend shimmed onto rap — plugs in as
+thread, and the transcript. Any agent (a scripted sequence, a model-backed
+planner, or dsh-superagent's subprocess backend shimmed onto rap) plugs in as
 `(fn [ctx] action)`.
 
 ## Use
@@ -43,7 +43,7 @@ planner, or dsh-superagent's subprocess backend shimmed onto rap — plugs in as
 - `faraday.agent` — the loop (`run!`, `:goal` stop-condition, `run-all!`).
 - `faraday.agent.loop` — loop-as-data: the turn loop is an EDN manifest in memo,
   validated by the plane and promoted through a soak/rollback gate.
-- `faraday.agent.model` — a robust model step-fn (repair→validate→escalate→
+- `faraday.agent.model` — a model step-fn (repair→validate→escalate→
   circuit-break) over a provider alias/role config.
 - `faraday.agent.harness` — the operator surface: launch/steer/observe N agents.
 

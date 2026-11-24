@@ -164,6 +164,38 @@
   (check "chat system" "S" (:system ch))
   (check "chat wrap" 70 (:wrap ch)))
 
+(let [f (tmpfile {:chat {:context ["you are terse" "prefer clojure"]}})
+      cfg (loadc f)
+      ch (c/resolve-chat cfg {:settings-file f :auth-file nf})]
+  (check "chat context list" ["you are terse" "prefer clojure"] (:context ch)))
+
+(let [f (tmpfile {:context "operator context string"})
+      cfg (loadc f)
+      ch (c/resolve-chat cfg {:settings-file f :auth-file nf})]
+  (check "top-level context string normalizes" ["operator context string"] (:context ch)))
+
+(let [cfg (loadc nf)
+      ch (c/resolve-chat cfg {:settings-file nf :auth-file nf})]
+  (check "no context is nil" nil (:context ch)))
+
+(let [nc #'c/normalize-context]
+  (check "normalize-context string" ["s"] (nc "s"))
+  (check "normalize-context drops blanks" ["a" "b"] (nc ["a" "" "b" "  " nil]))
+  (check "normalize-context all-blank is nil" nil (nc [""])))
+
+(let [f (tmpfile {:sandbox {:apk_packages ["git" "build-base"] :nix_flake "github:me/proj#dev"}})
+      cfg (loadc f)]
+  (check "sandbox apk packages resolve" ["git" "build-base"] (:apk-packages (c/resolve-sandbox cfg)))
+  (check "sandbox nix flake resolves" "github:me/proj#dev" (:nix-flake (c/resolve-sandbox cfg))))
+
+(let [f (tmpfile {:sandbox_apk_packages ["curl"]})
+      cfg (loadc f)]
+  (check "flat sandbox_apk_packages spelling" ["curl"] (:apk-packages (c/resolve-sandbox cfg))))
+
+(let [cfg (loadc nf)]
+  (check "no sandbox defaults empty apk" [] (:apk-packages (c/resolve-sandbox cfg)))
+  (check "no sandbox nix flake nil" nil (:nix-flake (c/resolve-sandbox cfg))))
+
 ;; -- validation ------------------------------------------------------------------
 (let [f (tmpfile {:roles {:escalate {:provider :nope}}
                   :escalation {:ladder [:repair :escalate :missing-role]}})

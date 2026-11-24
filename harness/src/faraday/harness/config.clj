@@ -272,6 +272,15 @@
 
 ;; -- proposer / chat ------------------------------------------------------------
 
+(defn resolve-sandbox
+  "Resolve the sandbox extension surface: {:apk-packages [...] :nix-flake s}.
+  Reads the merged config's :sandbox object (json-key normalized) plus the
+  operator's flat spellings sandbox_apk_packages / sandbox_nix_flake."
+  [config]
+  (let [s (:sandbox config)]
+    {:apk-packages (mapv str (or (:apk-packages s) (:sandbox-apk-packages config) []))
+     :nix-flake (or (:nix-flake s) (:sandbox-nix-flake config))}))
+
 (defn resolve-proposer
   "Resolve the model-proposer's LLM config: {:base-url :api-key :model ...}.
   Backward compatible with the old ~/.faraday/settings.json llm.* shape: the
@@ -306,10 +315,24 @@
                 (:model llm)
                 (:model p))}))
 
+(defn- normalize-context
+  "A context value is a string or a sequential collection of strings; return a
+  vector of non-blank strings, or nil when empty. The chat injects these into
+  its system prompt as operator-provided context — the nodecode/dirge/samizdat
+  model: an editable standing context that rides every request."
+  [v]
+  (let [vs (cond
+             (string? v) [v]
+             (sequential? v) (vec v)
+             :else nil)]
+    (not-empty
+     (vec (remove (fn [s] (or (nil? s) (str/blank? (str s)))) vs)))))
+
 (defn resolve-chat
-  "Resolve the chat TUI's defaults: {:base-url :api-key :model :system :wrap}.
-  Backward compatible with the old llm.* shape: chat.{provider,model,system,
-  wrap} wins, then llm.*, then the provider default."
+  "Resolve the chat TUI's defaults: {:base-url :api-key :model :system :wrap
+  :context}. Backward compatible with the old llm.* shape:
+  chat.{provider,model,system,wrap,context} wins, then llm.*, then the provider
+  default."
   [config opts]
   (let [settings (read-json-map (or (:settings-file opts) (settings-file)))
         llm (or (:llm settings) {})
@@ -335,6 +358,7 @@
                 (:model llm)
                 (:model p))
      :system (or (:system entry))
+     :context (normalize-context (or (:context opts) (:context entry) (:context config)))
      :wrap (or (:wrap opts) (:wrap entry))}))
 
 ;; -- volume mounts (compose-style) --------------------------------------------

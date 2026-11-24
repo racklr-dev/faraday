@@ -16,14 +16,16 @@
        "  → " (:status r)))
 
 (defn overview-section [b]
-  (let [{:keys [plane pool runs gate]} b]
+  (let [{:keys [plane pool runs gate faults]} b]
     [:vbox {:spacing 0}
      [:label {:label (str " plane   cpu " (get-in plane [:used :cpu]) "/" (get-in plane [:budget :cpu])
                           "   mem " (get-in plane [:used :mem-mb]) "/" (get-in plane [:budget :mem-mb])
                           "   granted " (:granted plane) "   waiting " (:waiting plane))}]
      [:label {:label (str " pool    warm " (:warm pool) "/" (:total pool)
                           "   snapshots " (:snapshots pool))}]
-     [:label {:label (str " gate    " (count gate) " decisions   runs " (count runs))}]]))
+     [:label {:label (str " gate    " (count gate) " decisions   runs " (count runs))}]
+     (when-let [f (first faults)]
+       [:label {:label (str " fault   " (:agent f) "  " (:error f)) :color :bright-red}])]))
 
 (defn runs-section [b]
   (let [runs (:runs b)]

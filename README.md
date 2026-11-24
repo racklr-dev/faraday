@@ -54,7 +54,7 @@ the gate, not a client, so the budget/policy gate stays authoritative.
 
 beta — the MVP plane runs end-to-end in-process: real KVM sandboxes, Cedar
 authorization, budget admission, ledger/fanout, the live console, and the
-agent stack (loop-as-data manifests with a soak/rollback gate, robust model
+agent stack (loop-as-data manifests with a soak/rollback gate, model
 step-fn, two-tier memory, and the launch/steer/observe harness), plus the
 first self-improvement slice: `faraday improve` observes a loop run, proposes
 a manifest rewrite, and routes it through the same soak/rollback gate, then

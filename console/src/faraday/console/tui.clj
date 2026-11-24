@@ -19,4 +19,10 @@
     (board/sample! runtime)
     (board/start-sampler! runtime 500)
     (let [view (r/atom "overview")]
-      (ui/run (fn [] (gv/app @board/board view)) :title "faraday console"))))
+      ;; The console lives on the terminal's alternate screen (restored on exit)
+      ;; and leaves mouse reporting off so native selection/clipboard work.
+      (print "\u001b[?1049h") (flush)
+      (try
+        (ui/run (fn [] (gv/app @board/board view)) :title "faraday console" :mouse? false)
+        (finally
+          (print "\u001b[?1049l") (flush))))))

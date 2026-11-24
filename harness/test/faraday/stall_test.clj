@@ -15,12 +15,17 @@
         (System/exit 1))))
 
 (let [state (r/atom {:messages []})
-      call (fn [_] "{:tool-call {:name \"board\" :args {}}}")
+      call (fn [msgs]
+             (if (some #(str/includes? (str (:content %)) "do not call tools") msgs)
+               "{:done \"here is the answer\"}"
+               "{:tool-call {:name \"board\" :args {}}}"))
       exec (fn [_ _] {:status :ok :exit 0 :stdout "" :progress? false})
       opts {:call call :exec exec :system "S" :max-turns 8 :max-stall 3}]
   (chat/run-turn! opts state [{:role :user :text "x"}])
-  (check "stall stops with a clear error" "no progress — stopping" (:error @state))
-  (check "stall ran fewer than max turns" true (> 8 (count (:messages @state)))))
+  (check "stall ends with a final answer" "here is the answer" (-> @state :messages last :text))
+  (check "stall clears the error banner" nil (:error @state))
+  (check "stall stops early (3 tool calls, not 8)"
+         true (> 8 (count (filter #(= :tool-call (:role %)) (:messages @state))))))
 
 (let [b (atom {:failures 0 :open? false})
       f (#'chat/with-circuit-breaker b (fn [_] ""))]

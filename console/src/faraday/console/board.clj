@@ -13,7 +13,7 @@
                :plane {:budget {:cpu 4 :mem-mb 4096}
                        :used {:cpu 0 :mem-mb 0} :granted 0 :waiting 0}
                :pool {:warm 0 :total 0 :snapshots 0 :sandboxes []}
-               :gate [] :runs [] :calls []
+               :gate [] :runs [] :calls [] :faults []
                :policies [] :egress [] :image "" :notice nil
                :dry-result nil :thread-detail nil :bench nil}))
 
@@ -61,7 +61,7 @@
     :ok :allow
     :denied :deny
     :error :error
-    :allow))
+    (:status result)))
 
 (defn record-run!
   "Called from the runtime's run-hook when a run reaches its terminal frame:
@@ -82,7 +82,7 @@
                   :decision (name (decision-for result))
                   :ts now}
         run-row {:request-id (or (:request-id result) (:call-id call))
-                 :thread-id (:thread-id result)
+                 :thread-id (or (:thread-id result) (:thread-id call))
                  :agent agent
                  :tool (or (:name call) "run_shell")
                  :argv (str/join " " (or (:argv args) []))
@@ -99,8 +99,22 @@
         (-> b
             (update :gate (fn [g] (take 30 (cons gate-row g))))
             (update :runs (fn [rs] (take 60 (cons run-row rs))))
-            (assoc :notice (when (= status :denied)
-                             (str "DENIED  " agent "  egress=" egress-ref))))))))
+            (assoc :notice (case status
+                             :denied (str "DENIED  " agent "  egress=" egress-ref)
+                             :error  (str "FAULT  " agent "  " (or (:error result) "error"))
+                             nil)))))))
+
+(defn record-fault!
+  "Called when run-sandbox! throws (e.g. kvm pre-flight failure): append a fault
+  row and surface it as the topbar notice, so a dead sandbox is never silent."
+  [call msg]
+  (let [agent (or (:owner call) (:thread-id call) "?")]
+    (swap! board
+      (fn [b]
+        (-> b
+            (update :faults (fn [fs] (take 20 (cons {:agent agent :error msg
+                                                     :ts (System/currentTimeMillis)} fs))))
+            (assoc :notice (str "FAULT  " agent "  " msg)))))))
 
 (defn start-sampler!
   "Sample every interval-ms on a thread until the returned stop fn runs."

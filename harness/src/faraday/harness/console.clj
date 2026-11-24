@@ -1,46 +1,24 @@
-;; faraday.harness.console — the operator console: chat + dashboard modes over
-;; one spine. The chat is faraday.harness.chat's component; the dashboard modes
-;; are faraday.console.views.glimmer's sections over faraday.console.board's
-;; ratom. The spine is the board + the chat's tools/session; terminal and web
-;; are two clients of it (this file is the terminal client).
+;; faraday.harness.console — the operator console. The terminal client of the
+;; spine is the chat surface; the dashboard modes are the web gateway's client,
+;; which run! starts below. Terminal and web are two clients of one spine
+;; (board + chat tools/session), so the terminal spends its screen on the
+;; conversation rather than on chrome.
 (ns faraday.harness.console
   (:require [glimmer.core :as ui]
-            [glimmer.ratom :as r]
             [glimmer-tui.core]
             [jolt.datastar.core :as datastar]
             [faraday.console.board :as board]
             [faraday.console.handler :as handler]
             [faraday.console.runtime :as crt]
-            [faraday.console.views.glimmer :as gv]
             [faraday.harness.chat :as chat]
             [ring-chez.adapter :as adapter]
             [clojure.string :as str]))
 
-(def modes
-  [["chat" "Chat"] ["overview" "Overview"] ["runs" "Runs"]
-   ["agents" "Agents"] ["threads" "Threads"] ["vms" "VMs"]
-   ["policy" "Policy"] ["egress" "Egress"] ["bench" "Bench"]])
-
 (defn app
-  "One tab bar over the modes; the chat mode embeds the chat component, the
-  dashboard modes read the board ratom."
-  [chat-opts view]
-  [:vbox {:spacing 0}
-   [:label {:label " faraday " :bold true :color :bright-cyan}]
-   [:hbox {:spacing 1 :margin [0 1]}
-    (for [[k label] modes]
-      [:button {:label label :on-click #(reset! view k)}])]
-   (case @view
-     "chat" [(chat/chat-app chat-opts)]
-     "overview" (gv/overview-section @board/board)
-     "runs" (gv/runs-section @board/board)
-     "agents" (gv/agents-section @board/board)
-     "threads" (gv/threads-section @board/board)
-     "vms" (gv/vms-section @board/board)
-     "policy" (gv/policy-section @board/board)
-     "egress" (gv/egress-section @board/board)
-     "bench" (gv/bench-section @board/board)
-     [:label {:label "unknown view"}])])
+  "The terminal surface: the chat component. The dashboard is served by the web
+  gateway started in run!."
+  [chat-opts]
+  (chat/chat-app chat-opts))
 
 (defn- start-gateway!
   "Start the web gateway on `port` if nothing is listening there; return true if
@@ -59,14 +37,20 @@
 
 (defn run!
   "Open the console stack (board + sampler), start the web gateway if it is not
-  running, and render the modes in the terminal, starting at `initial-view`
-  (default chat). The chat's pool tools see the same pool handle via `pool-ref`."
-  [{:keys [chat-opts initial-view pool-ref port] :or {initial-view "chat" port 8787}}]
+  running, and render the chat in the terminal. The chat's pool tools see the
+  same pool handle via `pool-ref`."
+  [{:keys [chat-opts pool-ref port] :or {port 8787}}]
   (let [runtime (crt/open-runtime! {:on-run board/record-run!})]
     (when pool-ref (reset! pool-ref (:pool runtime)))
     (board/seed-config! runtime)
     (board/sample! runtime)
     (board/start-sampler! runtime 500)
     (start-gateway! runtime port)
-    (let [view (r/atom initial-view)]
-      (ui/run (fn [] (app chat-opts view)) :title "faraday"))))
+    ;; Run the TUI on the terminal's alternate screen: the transcript stays
+    ;; off the shell's scrollback and, on ctrl-c, the operator's shell is
+    ;; restored as it was instead of leaving the transcript on screen.
+    (print "\u001b[?1049h") (flush)
+    (try
+      (ui/run (chat/chat-app chat-opts) :title "faraday" :mouse? false)
+      (finally
+        (print "\u001b[?1049l") (flush)))))

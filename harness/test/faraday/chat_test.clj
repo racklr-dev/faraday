@@ -106,6 +106,82 @@
     (check "transcript shows the final answer" true (str/includes? text "did it"))
     (check "two model calls (tool then done)" 2 (count @calls))
     (check "draft cleared after send" "" (get-in @(find-widget :entry root) [:props :text])))
+;; -- fatal tool errors stop the turn -----------------------------------------
+(check "group-members parses /etc/group"
+       #{"jm" "bob"}
+       (chat/group-members ["kvm:x:108:jm,bob"] "kvm"))
+(check "group-members missing group is nil"
+       nil
+       (chat/group-members ["kvm:x:108:jm"] "docker"))
+(check "group-members empty members is empty set"
+       #{}
+       (chat/group-members ["kvm:x:108:"] "kvm"))
+
+(let [calls (atom 0)
+      fake-call (fn [msgs] (swap! calls inc) "{:tool-call {:name \"run_shell\" :args {:argv [\"ls\"]}}}")
+      fake-exec (fn [name args] {:status :error :error "sandbox exec failed (kvm)" :fatal? true})
+      sess (chat/chat-session {:call fake-call :exec fake-exec :max-stall 8 :max-turns 8})
+      _ ((:send! sess) "look at this")
+      _ (Thread/sleep 200)
+      st @(:state sess)]
+  (check "fatal tool error stops the turn" "sandbox exec failed (kvm)" (:error st))
+  (check "fatal tool error makes one model call" 1 @calls)
+  (check "fatal tool error records call+result+answer" 4 (count (:messages st)))
+  (check "fatal tool error ends with an assistant answer" "sandbox exec failed (kvm)" (-> st :messages last :text)))
+
+(check "transcript drops blank prose lines"
+       ["hi"]
+       (map :text (chat/transcript-segments [{:role :user :text "hi"}
+                                             {:role :assistant :text ""}
+                                             {:role :assistant :text "\n\n"}]
+                                            40)))
+
+(check "system-with-context injects context before facts"
+       "base\n\nContext:\nc1\nc2\n\nYou remember these facts from earlier sessions:\n{:a 1}"
+       (chat/system-with-context "base" ["c1" "c2"] {:a 1}))
+
+(check "system-with-context no context no facts"
+       "base"
+       (chat/system-with-context "base" nil nil))
+
+;; -- max turns force a final answer instead of a dead stop ---------------------
+(let [calls (atom 0)
+      fake-call (fn [msgs]
+                  (swap! calls inc)
+                  (if (some #(str/includes? (str (:content %)) "do not call tools") msgs)
+                    "{:done \"best effort answer\"}"
+                    "{:tool-call {:name \"run_shell\" :args {:argv [\"ls\"]}}}"))
+      fake-exec (fn [_ _] {:status :ok :exit 0 :stdout "x"})
+      sess (chat/chat-session {:call fake-call :exec fake-exec :max-turns 2})
+      _ ((:send! sess) "do the thing")
+      _ (Thread/sleep 250)
+      st @(:state sess)]
+  (check "max-turns forces a final answer"
+         "best effort answer"
+         (-> st :messages last :text))
+  (check "max-turns clears the error banner" nil (:error st))
+  (check "max-turns clears busy" false (:busy? st)))
+
+;; -- working context lines ------------------------------------------------------
+(check "boot-context-lines with board not ready"
+       ["Working directory: /x"
+        "Project root: /x"
+        "Taskboard: NOT initialized — board/scope/hook tools will error; use run_shell instead (or run `faraday init` first)."]
+       (chat/boot-context-lines {:cwd "/x" :proj-root "/x" :board-ready? false}))
+
+(check "boot-context-lines with board ready"
+       ["Working directory: /x"
+        "Project root: /x"
+        "Taskboard: ready — board/scope/hook/pool tools work."]
+       (chat/boot-context-lines {:cwd "/x" :proj-root "/x" :board-ready? true}))
+
+(let [d (str (.toAbsolutePath (java.nio.file.Files/createTempDirectory "fctx" (make-array java.nio.file.attribute.FileAttribute 0))))
+      _ (spit (str d "/b.txt") "")
+      _ (spit (str d "/a.txt") "")]
+  (check "top-level-summary sorts names"
+         "a.txt b.txt"
+         (chat/top-level-summary d)))
+
   (println "chat_test OK"))
 
 (shutdown-agents)

@@ -21,8 +21,8 @@ which is the runnable surface for all of it.
   or nil on `:no-proposal`. Key from `FARADAY_LLM_API_KEY`/`DEEPSEEK_API_KEY`
   env, then `~/.faraday/settings.json`, then `~/.nodecode/auth.json`; model/base-url
   via `FARADAY_LLM_MODEL`/`FARADAY_LLM_BASE_URL` or the settings file; the
-  `:http` fn is a test seam. Throws on missing key or transport/model failure —
-  nil is reserved for a model that genuinely declines.
+  `:http` fn is a test seam. Throws on missing key or transport/model failure:
+  nil is reserved for a model that actually declines.
 
 ## Use
 
@@ -86,7 +86,7 @@ ladder the agent loop will run.
   the key in env / `~/.nodecode/auth.json` instead of the file. `api_key` (and
   the value `api_key_env` points at) may start with `!` to run a token helper,
   e.g. `"api_key": "!op read op://private/deepseek --account my"` or
-  `"!pass show DeepSeek/API"` — the command's first non-blank stdout line is the key.
+  `"!pass show DeepSeek/API"`: the command's first non-blank stdout line is the key.
 - **roles** — the policy positions the loop routes through (dirge's
   `*_provider` keys, one map). A role may name an `agent` (its prompt becomes
   the role's system prompt) and may override `model` / `reasoning` /
