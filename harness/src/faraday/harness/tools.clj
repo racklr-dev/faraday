@@ -139,6 +139,31 @@
 (defn- obj [props] {:type "object" :properties props})
 (defn- req [props required] (assoc (obj props) :required (vec required)))
 
+(def language-runners
+  "run_<lang> code-eval tools: name -> {:prefix [exe arg...] :ext \"ext\"}.
+  Inline :code is written to a scratch file under the workspace (.faraday/scratch,
+  mounted at the same host path in the sandbox) and run as (prefix path). Adding
+  a language is one entry here plus one tool-spec."
+  {"run_jolt" {:prefix ["jolt" "run"] :ext "clj"}})
+
+(defn run-code-tool?
+  "True when `name` is a run_<lang> code-eval tool."
+  [name]
+  (contains? language-runners name))
+
+(defn run-code-argv
+  "Write inline `code` for a run_* tool to a scratch file under `workspace` and
+  return {:argv [runner .. path] :path path}. The scratch dir is the project's
+  .faraday/scratch, which the sandbox mounts at the same host path, so the
+  absolute path works host-side and in the guest alike."
+  [name code workspace]
+  (let [{:keys [prefix ext]} (get language-runners name)
+        dir (str workspace "/.faraday/scratch")
+        path (str dir "/" name "." ext)]
+    (.mkdirs (java.io.File. dir))
+    (spit path (str code))
+    {:argv (into (vec prefix) [path]) :path path}))
+
 (def tool-specs
   "The tools: name, one-line description, the prompt args shape, and the JSON
   schema for OpenAI-style native function calling."
@@ -146,6 +171,10 @@
     :desc "run a shell command in the sandbox (cwd = this project dir)"
     :args "{:argv [\"cmd\" \"arg\" ...]}"
     :parameters (req {:argv {:type "array" :items {:type "string"}}} ["argv"])}
+   {:name "run_jolt"
+    :desc "evaluate jolt (Clojure) code in the sandbox; returns what it prints"
+    :args "{:code \"(println (range 5))\"}"
+    :parameters (req {:code {:type "string"}} ["code"])}
    {:name "pool_stats"
     :desc "warm VM pool stats"
     :args "{}"
@@ -206,3 +235,14 @@
             (map (fn [{:keys [name desc args]}]
                    (str "- " name " — " desc "\n    args: " args))
                  tool-specs)))
+
+(defn language-prompt
+  "Guidance for the run_* code-eval tools, injected into the agentic system
+  prompt so the model knows what to run, when, and where."
+  []
+  (str "Code evaluation:\n"
+       "- run_jolt evaluates jolt (Clojure) code in the sandbox at the project root,\n"
+       "  with deps from the project's deps.edn, and returns what the code prints.\n"
+       "  Use it to run a form and read the value, verify a guess about the codebase,\n"
+       "  or probe a namespace. Prefer run_jolt for evaluating Clojure; use run_shell\n"
+       "  for edits, git, and everything else shell-shaped."))

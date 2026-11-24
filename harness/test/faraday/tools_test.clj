@@ -51,6 +51,25 @@
 (let [tp (tools/tool-prompt)]
   (check-true "prompt lists run_shell" (str/includes? tp "run_shell"))
   (check-true "prompt lists board" (str/includes? tp "board"))
-  (check-true "prompt lists task_add" (str/includes? tp "task_add")))
+  (check-true "prompt lists task_add" (str/includes? tp "task_add"))
+  (check-true "prompt lists run_jolt" (str/includes? tp "run_jolt")))
+
+(check-true "run-code-tool? knows run_jolt" (tools/run-code-tool? "run_jolt"))
+(check "run-code-tool? rejects run_shell" false (tools/run-code-tool? "run_shell"))
+
+(let [{:keys [argv path]} (tools/run-code-argv "run_jolt" "(println 1)" root)]
+  (check "run-code-argv runs jolt on the scratch file" ["jolt" "run" path] argv)
+  (check-true "run-code-argv writes a .clj file" (str/ends-with? path ".clj"))
+  (check-true "run-code-argv file exists" (.isFile (java.io.File. path)))
+  (check-true "run-code-argv file holds the code" (str/includes? (slurp path) "(println 1)")))
+
+(let [lp (tools/language-prompt)]
+  (check-true "language prompt names run_jolt" (str/includes? lp "run_jolt"))
+  (check-true "language prompt says where it runs" (str/includes? lp "project root"))
+  (check-true "language prompt says when to prefer it" (str/includes? lp "Prefer run_jolt")))
+
+(let [ots (tools/openai-tools)]
+  (check-true "openai tools include run_jolt"
+              (boolean (some #(= "run_jolt" (get-in % [:function :name])) ots))))
 
 (println "ALL TOOLS TESTS PASSED")

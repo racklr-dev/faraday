@@ -143,6 +143,28 @@
   (tui/press! 14) (tui/drain!) (tui/frame!)
   (check "ctrl+n past newest clears the composer" "" (entry-text)))
 
+;; -- run_jolt routes to the executor ------------------------------------------
+(let [exec-names (atom [])
+      fake-call (fn [_]
+                  (if (empty? @exec-names)
+                    "{:tool-call {:name \"run_jolt\" :args {:code \"(println 1)\"}}}"
+                    "{:done \"ok\"}"))
+      fake-exec (fn [name args]
+                  (swap! exec-names conj name)
+                  {:status :ok :exit 0 :stdout "1\n" :stderr ""})
+      app (chat/chat-app {:call fake-call :exec fake-exec :wrap 40})
+      root (w/node :window {})
+      screen (scr/buffer-screen 60 20)]
+  (tui/attach! root screen)
+  (ui/mount root :window [app])
+  (tui/frame!)
+  (tui/press! 104)   ; h
+  (tui/press! 10)    ; enter
+  (Thread/sleep 150) (tui/drain!) (tui/frame!)
+  (check "run_jolt routes to the executor" ["run_jolt"] @exec-names)
+  (check "run_jolt result reaches the transcript" true
+         (str/includes? (apply str (scr/lines screen)) "1")))
+
 ;; -- fatal tool errors stop the turn -----------------------------------------
 (check "group-members parses /etc/group"
        #{"jm" "bob"}

@@ -82,6 +82,8 @@
        "Tools (each reply is exactly one EDN map, nothing else):\n"
        (tools/tool-prompt)
        "\n"
+       (tools/language-prompt)
+       "\n"
        "Working rules:\n"
        "- Treat the user message as the task. If it is terse or ambiguous, make the smallest reasonable assumption and start; ask a question only when the choice changes the work itself.\n"
        "- Read before you change. Prefer one targeted command over several probes.\n"
@@ -251,16 +253,20 @@
     (catch Exception _ nil)))
 
 (defn host-exec
-  "The default tool executor: run argv on the host in faraday's cwd. Returns
+  "The default tool executor: run argv on the host in faraday's cwd, or evaluate
+  a run_<lang> tool's :code via a scratch file. Returns
   {:status :ok|:error :exit int|nil :stdout :stderr :error}. The :exec seam lets
   a sandbox (jolt-sandbox microVM with volume mounts) take this slot instead."
   [name args]
-  (let [argv (:argv args)]
+  (let [argv (if (tools/run-code-tool? name)
+               (:argv (tools/run-code-argv name (:code args) (System/getProperty "user.dir")))
+               (:argv args))]
     (cond
       (not (and (vector? argv) (seq argv)))
-      {:status :error :error "tool args must be {:argv [..]}"}
+      {:status :error :error "tool args must be {:argv [..]}, or {:code \"...\"} for a run_* tool"}
 
-      (not (contains? #{"run_shell" "shell" "exec"} name))
+      (not (or (contains? #{"run_shell" "shell" "exec"} name)
+               (tools/run-code-tool? name)))
       {:status :error :error (str "unknown tool " (pr-str name))}
 
       :else
@@ -362,29 +368,32 @@
                              p)))]
     {:exec (fn [name args]
              (cond
-               (not (contains? #{"run_shell" "shell" "exec"} name))
+               (not (or (contains? #{"run_shell" "shell" "exec"} name)
+                        (tools/run-code-tool? name)))
                {:status :error :error (str "unknown tool " (pr-str name))}
-
-               (not (and (vector? (:argv args)) (seq (:argv args))))
-               {:status :error :error "tool args must be {:argv [..]}"}
 
                (:failed? @state)
                {:status :error :error (:boot-error @state) :fatal? true}
 
                :else
-               (try
-                 (let [p (ensure-pool!)
-                       r (sb-pool-exec p (argv->cmd (:argv args)) :timeout-ms 120000 :cwd workspace)]
-                   {:status (if (zero? (:exit r)) :ok :error)
-                    :exit (:exit r)
-                    :stdout (:stdout r)
-                    :stderr (:stderr r)})
-                 (catch Exception e
-                   (let [msg (str "sandbox exec failed (" (or (ex-message e) "?") ")")
-                         boot? (nil? (:pool @state))]
-                     (when boot?
-                       (swap! state assoc :failed? true :boot-error msg))
-                     {:status :error :error msg :fatal? boot?})))))
+               (let [argv (if (tools/run-code-tool? name)
+                            (:argv (tools/run-code-argv name (:code args) workspace))
+                            (:argv args))]
+                 (if (not (and (vector? argv) (seq argv)))
+                   {:status :error :error "tool args must be {:argv [..]}, or {:code \"...\"} for a run_* tool"}
+                   (try
+                     (let [p (ensure-pool!)
+                           r (sb-pool-exec p (argv->cmd argv) :timeout-ms 120000 :cwd workspace)]
+                       {:status (if (zero? (:exit r)) :ok :error)
+                        :exit (:exit r)
+                        :stdout (:stdout r)
+                        :stderr (:stderr r)})
+                     (catch Exception e
+                       (let [msg (str "sandbox exec failed (" (or (ex-message e) "?") ")")
+                             boot? (nil? (:pool @state))]
+                         (when boot?
+                           (swap! state assoc :failed? true :boot-error msg))
+                         {:status :error :error msg :fatal? boot?})))))))
      :close (fn []
               (when-let [p (:pool @state)]
                 (try (sb-close-pool! p) (catch Exception _ nil))))}))
@@ -1140,7 +1149,8 @@
                        :tasks active-tasks})
         pool-ref (atom nil)
         exec (fn [name args]
-               (if (contains? #{"run_shell" "shell" "exec"} name)
+               (if (or (contains? #{"run_shell" "shell" "exec"} name)
+                       (tools/run-code-tool? name))
                  (shell-exec name args)
                  (tools/dispatch @hd proj-root @pool-ref name args)))
         opts (cond-> {:exec exec :session @stores :thread-id thread-id
