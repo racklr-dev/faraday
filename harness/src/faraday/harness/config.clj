@@ -277,9 +277,16 @@
   Reads the merged config's :sandbox object (json-key normalized) plus the
   operator's flat spellings sandbox_apk_packages / sandbox_nix_flake."
   [config]
-  (let [s (:sandbox config)]
+  (let [s (:sandbox config)
+        e (:egress s)]
     {:apk-packages (mapv str (or (:apk-packages s) (:sandbox-apk-packages config) []))
-     :nix-flake (or (:nix-flake s) (:sandbox-nix-flake config))}))
+     :nix-flake (or (:nix-flake s) (:sandbox-nix-flake config))
+     :egress (when (or (:allowed-domains e) (:allowed-ports e) (:allowed-cidrs e))
+               (cond-> {}
+                 (:allowed-domains e) (assoc :allow-domains (mapv str (:allowed-domains e)))
+                 (:allowed-ports e)   (assoc :allow-ports (mapv long (:allowed-ports e)))
+                 (:allowed-cidrs e)   (assoc :allow-cidrs (mapv str (:allowed-cidrs e)))
+                 (:upstream e)        (assoc :upstream (:upstream e))))}))
 
 (defn resolve-proposer
   "Resolve the model-proposer's LLM config: {:base-url :api-key :model ...}.

@@ -63,7 +63,9 @@
     "~/projects:/home/sandbox/projects:ro"
   ],
 
-  "sandbox": { "apk_packages": ["python3"], "nix_flake": ".#default" },
+  "sandbox": { "apk_packages": ["python3"], "nix_flake": ".#default",
+    "egress": { "allowed_domains": ["github.com", "pypi.org", "crates.io", "static.crates.io"],
+      "allowed_ports": [80, 443], "upstream": "1.1.1.1" } },
 
   "proposer": { "provider": "deepseek", "model": "deepseek-flash" },
   "context":  "operator standing context, injected into every chat request",

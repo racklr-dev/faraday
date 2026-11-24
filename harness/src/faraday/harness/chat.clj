@@ -366,6 +366,7 @@
         image (or (:image opts) "alpine:3.20")
         packages (:packages opts)
         nix-flake (:nix-flake opts)
+        egress (:egress opts)
         ensure-pool! (fn []
                        (or (:pool @state)
                            (let [p (sb-make-pool {:image image
@@ -376,7 +377,8 @@
                                                   :mounts mounts
                                                   :writable-home? true
                                                   :packages packages
-                                                  :nix-flake nix-flake})]
+                                                  :nix-flake nix-flake
+                                                  :egress egress})]
                              (swap! state assoc :pool p)
                              p)))]
     {:exec (fn [name args]
@@ -1188,7 +1190,8 @@
                   (sandbox-exec-factory {:workspace (System/getProperty "user.dir")
                                          :mounts mounts
                                          :packages (:apk-packages sandbox-cfg)
-                                         :nix-flake (:nix-flake sandbox-cfg)}))
+                                         :nix-flake (:nix-flake sandbox-cfg)
+                                 :egress (:egress sandbox-cfg)}))
         sandbox-ctx (when sandbox
                       (str "Tools run in a jolt-sandbox microVM (alpine); the workspace is mounted at its own host path, so host paths work inside"
                            (when (:nix-flake sandbox-cfg)

@@ -57,6 +57,30 @@ each tool runs, so tools see the same toolchain the repo expects.
 `.#default` is a Nix *flake installable*, resolved by `nix print-dev-env` from
 the faraday repo root:
 
+### `sandbox.egress` — allow-listed outbound hosts
+
+By default the microVM has no outbound network. To give it managed egress to a
+set of hosts, set `sandbox.egress`:
+
+```json
+{ "sandbox": { "egress": {
+    "allowed_domains": ["github.com", "pypi.org", "files.pythonhosted.org",
+                        "crates.io", "static.crates.io", "index.crates.io"],
+    "allowed_ports": [80, 443],
+    "upstream": "1.1.1.1" } } }
+```
+
+- `allowed_domains` — dnsmasq resolves only these domains (and their
+  subdomains) and sinkholes everything else, so DNS itself is the domain gate.
+- `allowed_ports` — tcp ports the guest may egress to (default `[80 443]`),
+  enforced by an nftables default-deny forward chain.
+- `allowed_cidrs` (optional) — extra ip ranges to allow, bypassing DNS.
+- `upstream` — the resolver dnsmasq forwards allow-listed queries to
+  (default `1.1.1.1`).
+
+Needs `sudo` on the host (TAP + dnsmasq + nft + iptables), which faraday already
+requires for the sandbox.
+
 - `.` — the flake in the current directory (`faraday/flake.nix`).
 - `#default` — the `default` attribute of the flake's `devShells.<system>` set.
   Because `nix print-dev-env` looks in `devShells`, `.#default` is the faraday

@@ -188,6 +188,15 @@
   (check "sandbox apk packages resolve" ["git" "build-base"] (:apk-packages (c/resolve-sandbox cfg)))
   (check "sandbox nix flake resolves" "github:me/proj#dev" (:nix-flake (c/resolve-sandbox cfg))))
 
+(let [f (tmpfile {:sandbox {:egress {:allowed_domains ["github.com" "crates.io"]
+                                     :allowed_ports [80 443]
+                                     :upstream "1.1.1.1"}}})
+      cfg (loadc f)
+      e (:egress (c/resolve-sandbox cfg))]
+  (check "sandbox egress domains resolve" ["github.com" "crates.io"] (:allow-domains e))
+  (check "sandbox egress ports resolve" [80 443] (:allow-ports e))
+  (check "sandbox egress upstream resolves" "1.1.1.1" (:upstream e)))
+
 (let [f (tmpfile {:sandbox_apk_packages ["curl"]})
       cfg (loadc f)]
   (check "flat sandbox_apk_packages spelling" ["curl"] (:apk-packages (c/resolve-sandbox cfg))))
