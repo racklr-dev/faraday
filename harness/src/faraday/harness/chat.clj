@@ -971,6 +971,32 @@
     (seq facts)
     (str "\n\nYou remember these facts from earlier sessions:\n" (pr-str facts))))
 
+(defn- transcript-view
+  "The transcript vbox hiccup for `messages`. Pure in its args, so a cached
+  caller can reuse the same hiccup object while the transcript is unchanged
+  (scrolling only moves the viewport; it never rebuilds the transcript)."
+  [messages expanded wrap]
+  (let [last-assistant-idx (last (keep-indexed (fn [i e] (when (= :assistant (:role e)) i)) messages))]
+    (into [:vbox {:spacing 0 :padding [1 2 1 1]}]
+          (if (empty? messages)
+            [[:label {:label "Type a task; faraday runs tools and answers." :dim true}]]
+            (map-indexed (fn [i e] (entry-hiccup expanded wrap (= i last-assistant-idx) i e)) messages)))))
+
+(defonce ^:private transcript-cache (atom nil))
+(defonce ^:private transcript-key (atom nil))
+
+(defn- transcript-view-cached
+  "Single-entry memo over transcript-view: keyed by [messages @expanded wrap],
+  so an unchanged transcript returns the identical hiccup object."
+  [messages expanded wrap]
+  (let [k [messages @expanded wrap]]
+    (if (= @transcript-key k)
+      @transcript-cache
+      (let [h (transcript-view messages expanded wrap)]
+        (reset! transcript-key k)
+        (reset! transcript-cache h)
+        h))))
+
 (defn chat-app
   "The agentic chat component. `opts` accepts :system, :wrap, :model, :base-url,
   :api-key (the latter three override config/resolve-chat), :max-turns, and the
@@ -1009,7 +1035,7 @@
         tick (r/atom 0)
         _ (tui/every! 100
                       (fn []
-                        (swap! tick inc)
+                        (when (:busy? @state) (swap! tick inc))
                         (when (and @pending? (not (:busy? @state)))
                           (reset! pending? false)
                           (let [text (str/trim (str @draft))]
@@ -1065,8 +1091,7 @@
                   (scroll-to-bottom!)
                   ((:send! sess) text)))))]
     (fn []
-      (let [{:keys [messages busy? error]} @state
-            last-assistant-idx (last (keep-indexed (fn [i e] (when (= :assistant (:role e)) i)) messages))]
+      (let [{:keys [messages busy? error]} @state]
         [:vbox {:spacing 0 :margin [0 1 0 1]
                 :on-key (fn [ev]
                           (cond
@@ -1077,10 +1102,7 @@
                                 (k/match? ev "pgup") (k/match? ev "pgdn"))
                             (do (transcript-scroll! ev) true)))}
          [:scroll {:orientation :vertical :vexpand true}
-          (into [:vbox {:spacing 0 :padding [1 2 1 1]}]
-                (if (empty? messages)
-                  [[:label {:label "Type a task; faraday runs tools and answers." :dim true}]]
-                  (map-indexed (fn [i e] (entry-hiccup expanded wrap (= i last-assistant-idx) i e)) messages)))]
+          (transcript-view-cached messages expanded wrap)]
          [:hbox {:spacing 2 :margin [1 0 0 0]}
           (if busy?
             [:spinner {:tick @tick :label "working" :color (:tool pal)}]
