@@ -180,6 +180,41 @@
   (check "up arrow scrolls off the bottom pin" true
          (< (get-in @(find-widget :scroll root) [:state :y-offset] 2147483647) 1000000)))
 
+;; -- send while busy interrupts the running tool and stages the message ------
+(let [calls (atom 0)
+      saw-interrupt (atom false)
+      fake-call (fn [_]
+                  (if (zero? @calls)
+                    (do (swap! calls inc) "{:tool-call {:name \"run_shell\" :args {:argv [\"slow\"]}}}")
+                    "{:done \"ok\"}"))
+      fake-exec (fn [_ _]
+                  (loop [i 0]
+                    (cond
+                      @chat/*interrupt*
+                      (do (reset! saw-interrupt true)
+                          {:status :error :error "interrupted" :interrupted? true})
+
+                      (>= i 400)
+                      {:status :ok :exit 0 :stdout "done"}
+
+                      :else
+                      (do (Thread/sleep 10) (recur (inc i))))))
+      app (chat/chat-app {:call fake-call :exec fake-exec :wrap 40})
+      root (w/node :window {})
+      screen (scr/buffer-screen 60 20)]
+  (tui/attach! root screen)
+  (ui/mount root :window [app])
+  (tui/frame!)
+  (doseq [c (map int "go")] (tui/press! c))
+  (tui/press! 10)
+  (Thread/sleep 120)   ; the tool is now mid-flight
+  (doseq [c (map int "steer")] (tui/press! c))
+  (tui/press! 10)      ; send while busy -> interrupt + stage
+  (Thread/sleep 300) (tui/drain!) (tui/frame!)
+  (check "send while busy interrupts the running tool" true @saw-interrupt)
+  (check "staged message lands as the next turn" true
+         (str/includes? (apply str (scr/lines screen)) "steer")))
+
 ;; -- fatal tool errors stop the turn -----------------------------------------
 (check "group-members parses /etc/group"
        #{"jm" "bob"}

@@ -1007,20 +1007,24 @@
                             :stores stores :thread-id thread-id})
         state (:state sess)
         interrupt! (:interrupt! sess)
-        queued (r/atom nil)
+        pending? (r/atom false)
         draft (r/atom "")
+        hist-idx (r/atom nil)
         tick (r/atom 0)
         _ (tui/every! 100
                       (fn []
                         (swap! tick inc)
-                        (when (and (seq @queued) (not (:busy? @state)))
-                          (let [t @queued]
-                            (reset! queued nil)
-                            ((:send! sess) t)))))
+                        (when (and @pending? (not (:busy? @state)))
+                          (reset! pending? false)
+                          (let [text (str/trim (str @draft))]
+                            (when (seq text)
+                              (reset! draft "")
+                              (reset! hist-idx nil)
+                              (scroll-to-bottom!)
+                              ((:send! sess) text))))))
         model (or (:model cfg) "faraday")
         expanded (r/atom #{})
         copied (r/atom nil)
-        hist-idx (r/atom nil)
         user-texts
         (fn [] (vec (keep (fn [e] (when (= :user (:role e)) (:text e))) (:messages @state))))
         recall!
@@ -1050,13 +1054,17 @@
           (let [text (str/trim (str @draft))]
             (cond
               (empty? text) nil
+
               (:busy? @state)
-              (do (reset! queued text)
-                  (reset! draft "")
-                  (reset! copied nil))
+              ;; sending while the agent is working interrupts the running turn
+              ;; and stages the message; the draft stays in the composer so it
+              ;; can be edited or cleared until the turn stops and it lands
+              (do (interrupt!)
+                  (reset! pending? true))
 
               :else
               (do (reset! draft "")
+                  (reset! pending? false)
                   (reset! hist-idx nil)
                   (scroll-to-bottom!)
                   ((:send! sess) text)))))]
@@ -1069,7 +1077,6 @@
                             (k/match? ev "ctrl+y") (do (copy-last-answer!) true)
                             (k/match? ev "ctrl+p") (do (recall! :prev) true)
                             (k/match? ev "ctrl+n") (do (recall! :next) true)
-                            (k/match? ev "ctrl+g") (do (interrupt!) true)
                             (or (k/match? ev "up") (k/match? ev "down")
                                 (k/match? ev "pgup") (k/match? ev "pgdn"))
                             (do (transcript-scroll! ev) true)))}
@@ -1086,12 +1093,12 @@
           (let [recall-hint (when (some? @hist-idx)
                               (str "recall " (inc @hist-idx) "/" (count (user-texts))
                                    " · ctrl+n newer · ctrl+p older"))
-                queued-hint (when (seq @queued)
-                              (str "queued: " (subs (str @queued) 0 (min 24 (count (str @queued))))))]
-            [:label {:label (or @copied recall-hint queued-hint
-                                "ctrl+c quit · ctrl+y copy · ctrl+g stop · ctrl+p/n recall · ↑/↓ pgup/pgdn scroll")
-                     :color (if (or @copied recall-hint queued-hint) (:assistant pal) (:muted pal))
-                     :dim (not (or @copied recall-hint queued-hint))
+                pending-hint (when @pending?
+                               "staged — edit or clear to cancel")]
+            [:label {:label (or @copied recall-hint pending-hint
+                                "ctrl+c quit · ctrl+y copy · ctrl+p/n recall · ↑/↓ pgup/pgdn scroll")
+                     :color (if (or @copied recall-hint pending-hint) (:assistant pal) (:muted pal))
+                     :dim (not (or @copied recall-hint pending-hint))
                      :halign :end :hexpand true}])]
          (when error
            [:label {:label (str "⚠ " error) :color (:danger pal)}])
