@@ -8,3 +8,7 @@ target/
 
 # nodecode editor temp files
 .nodecode-*
+
+# nix build symlink
+result
+result-*

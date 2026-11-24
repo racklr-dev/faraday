@@ -2,11 +2,11 @@
 
  :deps {racklr-dev/jolt-admission
         {:git/url "https://github.com/racklr-dev/jolt-admission"
-         :git/sha "7576e67a10ae1b425db6a24a7a870410b4113a40"}
+         :git/sha "338c7664e9aa084030a370b29e2524f9c85c6d71"}
 
         racklr-dev/jolt-cedar
         {:git/url "https://github.com/racklr-dev/jolt-cedar"
-         :git/sha "bf7ec485b4613ce583816160779a44231b605afe"}
+         :git/sha "f95e57a078e4ec9fff1e9dbd2d682b6a57f5cc71"}
 
         racklr-dev/faraday-pool
         {:local/root "../pool"}
