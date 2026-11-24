@@ -574,13 +574,7 @@
   because no public getter exists; this is only for pinning the transcript scroll
   to the bottom and fails closed."
   []
-  (letfn [(inst-widget [inst-atom]
-            (when inst-atom
-              (let [inst @inst-atom]
-                (or (:widget inst)
-                    (some-> (first (:children inst)) inst-widget)))))]
-    (when-let [state @#'glimmer.core/live-root]
-      (inst-widget (:inst state)))))
+  (:inst @@#'glimmer.core/live-root))
 
 (defn- find-scroll-widget
   [w]
@@ -605,7 +599,7 @@
   always focused, so arrow/page keys never reach the :scroll widget (a sibling);
   they bubble here instead and we drive the laid-out scroll node directly."
   [ev]
-  (let [{:keys [tree root]} @#'glimmer-tui.core/app]
+  (let [{:keys [tree root]} @@#'glimmer-tui.core/app]
     (when (and tree root)
       (when-let [n (some (fn [x] (when (= :scroll (w/container-kind (:tag x))) x))
                          (w/walk tree))]

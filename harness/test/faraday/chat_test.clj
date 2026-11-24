@@ -165,7 +165,8 @@
   (check "run_jolt result reaches the transcript" true
          (str/includes? (apply str (scr/lines screen)) "1")))
 
-;; -- scroll: the always-focused composer must not steal the arrow keys --------
+;; -- scroll: arrows/page keys scroll the transcript even though the composer
+;; -- is always focused; a long transcript overflows and auto-pins to the bottom
 (let [fake-call (fn [_] "{:done \"ok\"}")
       fake-exec (fn [_ _] {:status :ok :exit 0 :stdout ""})
       app (chat/chat-app {:call fake-call :exec fake-exec :wrap 40})
@@ -174,11 +175,17 @@
   (tui/attach! root screen)
   (ui/mount root :window [app])
   (tui/frame!)
-  (tui/press! 104) (tui/press! 10)   ; send "h" -> pins the transcript scroll
-  (Thread/sleep 150) (tui/drain!) (tui/frame!)
-  (tui/press! 259) (tui/drain!) (tui/frame!)   ; up arrow scrolls
-  (check "up arrow scrolls off the bottom pin" true
-         (< (get-in @(find-widget :scroll root) [:state :y-offset] 2147483647) 1000000)))
+  (dotimes [_ 10]
+    (tui/press! 104) (tui/press! 10)   ; send "h" x10 -> overflow
+    (Thread/sleep 80) (tui/drain!) (tui/frame!))
+  (let [n (some (fn [x] (when (= :scroll (w/container-kind (:tag x))) x))
+                (w/walk (:tree @@#'tui/app)))]
+    (check "long transcript overflows the viewport" true
+           (> (:h (:content n 0)) (:h (:viewport n 0)))))
+  (let [before (apply str (scr/lines screen))]
+    (tui/press! 338) (tui/drain!) (tui/frame!)   ; pgdn scrolls down
+    (check "pgdn scrolls the transcript" true
+           (not= before (apply str (scr/lines screen))))))
 
 ;; -- send while busy interrupts the running tool and stages the message ------
 (let [calls (atom 0)
