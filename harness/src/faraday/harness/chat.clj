@@ -382,6 +382,31 @@
             [[:text (str/replace line #"\*\*(.+?)\*\*" "$1")]])))
       (str/split-lines (str text))))))
 
+(defn chat-session
+  "A headless chat: owns the transcript and drives the tool loop. Returns
+  {:state (ratom {:messages :busy? :error}) :send! (fn text)}. The terminal TUI
+  renders :state; the web console can render and drive the same :state, so both
+  clients see one conversation."
+  [{:keys [call exec system max-turns max-stall stores thread-id]}]
+  (let [state (r/atom {:messages (or (when (and stores thread-id)
+                                      (try (session/resume stores thread-id)
+                                           (catch Exception _ nil)))
+                                    [])
+                       :busy? false :error nil})
+        send! (fn [text]
+                (let [text (str/trim (str text))]
+                  (when (and (seq text) (not (:busy? @state)))
+                    (let [es (conj (:messages @state) {:role :user :text text})]
+                      (swap! state assoc :busy? true :error nil :messages es)
+                      (future
+                        (run-turn! {:call call :exec exec :system system
+                                    :max-turns max-turns :max-stall max-stall}
+                                   state es)
+                        (when (and stores thread-id)
+                          (try (session/persist! stores thread-id (:messages @state))
+                               (catch Exception _ nil))))))))]
+    {:state state :send! send!}))
+
 (defn chat-app
   "The agentic chat component. `opts` accepts :system, :wrap, :model, :base-url,
   :api-key (the latter three override config/resolve-chat), :max-turns, and the
@@ -406,9 +431,9 @@
                  (if (seq facts)
                    (str base "\n\nYou remember these facts from earlier sessions:\n" (pr-str facts))
                    base))
-        resumed (when (and stores thread-id)
-                  (try (session/resume stores thread-id) (catch Exception _ nil)))
-        state (r/atom {:messages (or resumed []) :busy? false :error nil})
+        sess (chat-session {:call call :exec exec :system system :max-turns max-turns
+                            :stores stores :thread-id thread-id})
+        state (:state sess)
         draft (r/atom "")
         transcript-lines
         (fn []
@@ -430,15 +455,8 @@
           (let [text (str/trim (str @draft))]
             (when (and (seq text) (not (:busy? @state)))
               (reset! draft "")
-              (let [es (conj (:messages @state) {:role :user :text text})]
-                (swap! state assoc :busy? true :error nil :messages es)
-                (scroll-to-bottom!)
-                (future
-                  (run-turn! {:call call :exec exec :system system :max-turns max-turns}
-                             state es)
-                  (when (and stores thread-id)
-                    (try (session/persist! stores thread-id (:messages @state))
-                         (catch Exception _ nil))))))))]
+              (scroll-to-bottom!)
+              ((:send! sess) text))))]
     (fn []
       (let [{:keys [messages busy? error]} @state
             lines (vec (transcript-lines))]
