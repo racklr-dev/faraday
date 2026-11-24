@@ -1,5 +1,6 @@
 {
-  "_comment": "faraday settings — drop this at ~/.faraday/settings.json (user) or <project>/.faraday/settings.json (project, wins). All keys optional; shown are the built-in defaults plus the dirge-style surface. Never put a raw api_key here; prefer api_key_env and keep keys in env or ~/.nodecode/auth.json. api_key (and the value api_key_env points at) may start with '!' to run a token helper command, e.g. \"api_key\": \"!op read op://private/deepseek --account my\", or \"!pass show DeepSeek/API\". Add sandbox.nix_flake (e.g. \".#default\") to layer a nix devShell into the sandbox; needs nix + flakes on the host.",
+  "$schema": "../docs/settings.schema.json",
+  "_comment": "faraday settings — drop this at ~/.faraday/settings.json (user) or <project>/.faraday/settings.json (project, wins). All keys optional; shown are the built-in defaults plus the dirge-style surface. The field-by-field reference is docs/settings.md. Never put a raw api_key here; prefer api_key_env and keep keys in env or ~/.nodecode/auth.json. api_key (and the value api_key_env points at) may start with '!' to run a token helper command, e.g. \"api_key\": \"!op read op://private/deepseek\", or \"!pass show DeepSeek/API\". Add sandbox.nix_flake (e.g. \".#default\") to layer a nix devShell into the sandbox; needs nix + flakes on the host.",
 
   "providers": {
     "deepseek": {
@@ -62,7 +63,7 @@
     "~/projects:/home/sandbox/projects:ro"
   ],
 
-  "sandbox": { "apk_packages": ["python3"] },
+  "sandbox": { "apk_packages": ["python3"], "nix_flake": ".#default" },
 
   "proposer": { "provider": "deepseek", "model": "deepseek-flash" },
   "context":  "operator standing context, injected into every chat request",

@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/racklr-dev/faraday/blob/main/docs/settings.schema.json",
+  "title": "faraday settings.json",
+  "description": "Shape of ~/.faraday/settings.json and <project>/.faraday/settings.json. DESCRIPTIVE, not normative: faraday.harness.config (config.clj) is the resolver of record, and keys are read with underscores normalized to hyphens. additionalProperties is true so legacy (llm, sandbox_*) and forward keys never fail validation.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "$schema": { "type": "string" },
+    "_comment": { "type": "string" },
+    "providers": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "provider_type": { "type": "string" },
+          "base_url": { "type": "string", "format": "uri" },
+          "model": { "type": "string" },
+          "api_key_env": { "type": "string" },
+          "api_key": { "type": "string", "description": "May start with '!' to run a token helper command." },
+          "reasoning": { "type": "string", "enum": ["low", "medium", "high", "max"] },
+          "temperature": { "type": "number" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "roles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "provider": { "type": "string" },
+          "model": { "type": "string" },
+          "reasoning": { "type": "string" },
+          "temperature": { "type": "number" },
+          "agent": { "type": "string" },
+          "system": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "agents": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "prompt": { "type": "string" },
+          "system": { "type": "string" },
+          "provider": { "type": "string" },
+          "model": { "type": "string" },
+          "reasoning": { "type": "string" },
+          "temperature": { "type": "number" },
+          "allow_tools": { "type": "array", "items": { "type": "string" } },
+          "deny_tools": { "type": "array", "items": { "type": "string" } },
+          "description": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "escalation": {
+      "type": "object",
+      "properties": {
+        "max_repairs": { "type": "integer", "minimum": 0 },
+        "max_escalations": { "type": "integer", "minimum": 0 },
+        "breaker_threshold": { "type": "integer", "minimum": 0 },
+        "ladder": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "mounts": {
+      "type": "array",
+      "items": { "type": "string", "description": "host:guest[:ro|rw] (compose-style, ro default)" }
+    },
+    "sandbox": {
+      "type": "object",
+      "properties": {
+        "apk_packages": { "type": "array", "items": { "type": "string" } },
+        "nix_flake": { "type": "string", "description": "Flake devShell layered into the sandbox, e.g. .#default." }
+      },
+      "additionalProperties": true
+    },
+    "proposer": {
+      "type": "object",
+      "properties": {
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "base_url": { "type": "string", "format": "uri" }
+      },
+      "additionalProperties": true
+    },
+    "chat": {
+      "type": "object",
+      "properties": {
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "system": { "type": "string" },
+        "wrap": { "type": "integer", "minimum": 1 },
+        "context": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } }
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "context": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "api_keys": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": { "key": { "type": "string" } },
+        "additionalProperties": true
+      }
+    },
+    "llm": {
+      "type": "object",
+      "description": "Legacy settings shape; still honored for proposer/chat backward compatibility.",
+      "additionalProperties": true
+    },
+    "sandbox_apk_packages": { "type": "array", "items": { "type": "string" } },
+    "sandbox_nix_flake": { "type": "string" }
+  }
+}

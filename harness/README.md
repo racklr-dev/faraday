@@ -55,7 +55,10 @@ known-bad fixtures produce the same verdict.
 `faraday` reads `~/.faraday/settings.json` (user) and, when present,
 `<project>/.faraday/settings.json` (project, wins), shaped like dirge's
 config.json — the same idea as `.claude/settings.json` / `.gemini/settings.json`.
-See `harness/settings.example.json` for the full annotated shape. Every key is
+See `harness/settings.example.json` for the full annotated shape, and
+[docs/settings.md](../docs/settings.md) for the field-by-field reference
+(including `sandbox.nix_flake` / `.#default`), with a JSON Schema at
+[docs/settings.schema.json](../docs/settings.schema.json). Every key is
 optional; `faraday config` prints what resolves, `faraday config --check`
 validates references, and `faraday config model-step` shows the escalation
 ladder the agent loop will run.

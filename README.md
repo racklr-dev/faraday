@@ -69,5 +69,6 @@ EPL-2.0
 
 - [jolt-lang](https://github.com/jolt-lang/jolt) — the language and toolchain
 - [faraday-contracts](contracts/SPEC.md) — the wire spec every module implements
+- [docs/settings.md](docs/settings.md) — the settings.json reference, including `sandbox.nix_flake` / `.#default`
 - [jolt-microvm](https://github.com/racklr-dev/jolt-microvm) — the sandbox 
 - [libkrun](https://github.com/containers/libkrun) — the microVM runtime
