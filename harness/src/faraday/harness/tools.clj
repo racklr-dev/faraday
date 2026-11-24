@@ -9,10 +9,23 @@
             [faraday.pool :as pool]
             [clojure.string :as str]))
 
+(defn find-root
+  "Walk up from `start` to the nearest directory with .faraday/harness.db; if
+  none, return `start` (a fresh DB can be init'd there)."
+  [start]
+  (let [start (.getCanonicalPath (java.io.File. start))]
+    (loop [dir (.getCanonicalFile (java.io.File. start))]
+      (let [db (java.io.File. dir ".faraday" "harness.db")]
+        (cond
+          (.isFile db) (.getCanonicalPath dir)
+          (nil? (.getParentFile dir)) start
+          :else (recur (.getParentFile dir)))))))
+
 (defn open
-  "Open the harness DB for the project at root."
+  "Open the harness DB for the project at (find-root root)."
   [root]
-  (h/new-harness {:path (str root "/.faraday/harness.db")}))
+  (let [r (find-root root)]
+    (h/new-harness {:path (str r "/.faraday/harness.db")})))
 
 (defn- current-project [hd root]
   (or (h/project-by-root hd root)
@@ -51,9 +64,11 @@
       "vm_start"
       (if pool-handle
         (let [n (max 1 (long (or (:n args) 1)))
-              image (:image args)]
+              image (:image args)
+              req (cond-> {:argv ["true"]}
+                    image (assoc :image image))]
           (dotimes [_ n]
-            (let [h (pool/acquire pool-handle (if image {:image image} {}))]
+            (let [h (pool/acquire pool-handle req)]
               (pool/release pool-handle h)))
           (ok (pr-str (pool/stats pool-handle))))
         (err "pool is not open"))
