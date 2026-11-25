@@ -595,11 +595,13 @@
                            r (sb-pool-exec p (argv->cmd argv) :timeout-ms 120000 :cwd workspace :interrupt *interrupt*)]
                        (if (:interrupted? r)
                          {:status :error :error "interrupted" :interrupted? true}
-                         (if (and (= 255 (:exit r))
+                         (if (and (contains? #{126 127 255} (:exit r))
                                   (str/blank? (str (:stdout r)))
                                   (str/blank? (str (:stderr r))))
-                           ;; ssh transport failure: the VM is unreachable. Drop
-                           ;; the dead pool so the next call boots a fresh VM.
+                           ;; 255 = ssh transport failure; 126/127 with empty
+                           ;; output = the devShell layer dropped (nix-store
+                           ;; binaries gone). Either way the VM is unusable:
+                           ;; drop it so the next call boots fresh.
                            (do (recycle-pool!)
                                {:status :error
                                 :error "sandbox VM unreachable (recycled); retry"
@@ -1474,7 +1476,7 @@
                             :halign :end :hexpand true
                             :bg (themes/color :canvas)}]]))
               shown))
-       [[:label {:label "  no matching command" :color (themes/color :muted) :dim true}]])
+       [:label {:label "  no matching command" :color (themes/color :muted) :dim true}])
      [:hbox {:padding [0 1]}
       [:label {:label (str (count matches) " command"
                            (when (not= 1 (count matches)) "s"))
