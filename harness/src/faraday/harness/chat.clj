@@ -8,15 +8,22 @@
 ;; until the model answers {:done "..."} (or plain text). This is the same
 ;; tool-call/EDN action contract faraday.agent and faraday.rap already speak.
 ;;
-;; Pure, tested pieces: word-wrap, build-messages, format-tool-result, parse-action.
+;; Pure, tested pieces: word-wrap, build-messages, format-tool-result, parse-action,
+;; parse-task-line/task-row/board-rows/task-detail-rows, undo/redo branch rewind.
 (ns faraday.harness.chat
   (:require [clojure.data.json :as json]
+            [clojure.edn :as edn]
             [clojure.string :as str]
             [faraday.harness :as h]
+            [faraday.harness.run :as run]
+            [faraday.harness.commands :as cmd]
             [faraday.harness.config :as config]
+            [faraday.harness.dialog :as dialog]
             [faraday.harness.llm :as llm]
             [faraday.harness.session :as session]
+            [faraday.harness.settings :as settings]
             [faraday.harness.tools :as tools]
+            [faraday.themes :as themes]
             [glimmer.core :as ui]
             [glimmer.ratom :as r]
             [glimmer-tui.core :as tui]
@@ -26,17 +33,13 @@
             [jolt.host]
             [jolt.markdown.core :as md]))
 
-;; -- the design language ------------------------------------------------------
-;; faraday's terminal surfaces borrow nodecode's Tungstene palette and chrome:
-;; dark canvas, cool section bars, blue user / green assistant / amber tool
-;; hues. glimmer-tui folds each hex down to the terminal's palette, so the same
-;; props stay legible on a 256-colour and a 16-colour tty.
-(def palette
-  {:canvas "#1c1f26" :section "#181b22" :surface "#232730" :composer "#3d414a"
-   :selection "#3a3f4c" :hover "#292d37" :chip "#575b64" :slab "#1b2125"
-   :foreground "#ebeef4" :muted "#8e96a4" :chrome "#d2d6de"
-   :user "#84b2ff" :assistant "#82d6b0" :tool "#e4b860" :heading "#bcdcf5"
-   :code "#7fb0d7" :accent "#f6c075" :danger "#ff7e7e"})
+;; register the dialog's zero-size :focus-sink widget once, at load
+(dialog/install!)
+
+;; -- colours -----------------------------------------------------------------
+;; All colours resolve through faraday.themes/color at paint time; this file
+;; carries no hex literals and no theme-file knowledge. The active pack is
+;; selected by ~/.faraday/settings.json {"theme": "...", "appearance": "..."}.
 
 ;; -- pure: word wrapping ------------------------------------------------------
 ;; Labels do not wrap (they are measured at their widest line and truncated to
@@ -90,9 +93,10 @@
        "- Read before you change. Prefer one targeted command over several probes.\n"
        "- In run_shell the project directory is mounted at its own host path, so the paths in Context work verbatim. Board/scope/hook tools only work when Context says the taskboard is ready.\n"
        "- Never repeat a failed command unchanged — adapt it.\n"
+       "- When the task is to show, read, print, or inspect a file (or its contents), answer with the file's full text verbatim — never a summary, and never 'see the tool output above'. Paste the whole file raw, no surrounding fence; it renders inline.\n"
        "- Your turn budget is small: stop and answer as soon as you have the result.\n"
        "\n"
-       "Answer with {:done \"...\"} (or plain text for a short answer). Report concretely: files changed or commands run, and what you verified. No preamble, no filler."))
+       "Answer with {:done \"...\"} (or plain text for a short answer). Report concretely: files changed or commands run, and what you verified. When the task was to show/read a file, the answer is the file's contents in full. No preamble, no filler."))
 
 ;; -- working context ---------------------------------------------------------
 ;; Injected into the system prompt so the model spends its turn budget on the
@@ -204,6 +208,132 @@
        (when (seq (:error e)) (str ", error: " (:error e)))
        ":\n" (or (:text e) "")))
 
+(defn transcript->markdown
+  "The conversation as Markdown: each entry becomes a role heading and its
+  text. Tool calls are fenced with the argv the model emitted; tool results
+  reuse format-tool-result. Pure; tests pin the format."
+  [messages]
+  (str "# faraday session\n\n"
+       (str/join
+        "\n\n"
+        (map
+         (fn [e]
+           (case (:role e)
+             :user (str "## user\n\n" (or (:text e) ""))
+             :assistant (str "## assistant\n\n" (or (:text e) ""))
+             :tool-call (let [argv (seq (:argv (:args e)))]
+                          (str "## tool-call\n\n```\n"
+                               "$" (when (or (:name e) argv) " ")
+                               (or (:name e) "")
+                               (when argv (str " " (str/join " " (map str argv))))
+                               "\n```"))
+             :tool-result (str "## tool-result\n\n"
+                               (format-tool-result
+                                (select-keys e [:name :status :exit :error :text])))
+             (str "## " (name (or (:role e) :system)) "\n\n"
+                  (or (:text e) (:content e) ""))))
+         messages))))
+
+(defn export-session!
+  "Write `messages` as Markdown. `path` may be a file path, a directory, or
+  blank: blank or a directory writes faraday-<thread-id>.md there (blank -> the
+  :cwd opt, default the process cwd). Returns the absolute path written.
+  opts: :cwd (default dir), :spit-fn (test seam, default clojure.core/spit)."
+  [messages thread-id path & [{:keys [cwd spit-fn]
+                               :or {cwd (System/getProperty "user.dir")
+                                    spit-fn spit}}]]
+  (let [p (cond
+            (nil? path) ""
+            (str/starts-with? path "~/") (str (System/getProperty "user.home") (subs path 1))
+            :else path)
+        f (java.io.File. p)
+        dir (cond
+              (str/blank? p) cwd
+              (.isDirectory f) p
+              :else nil)
+        target (java.io.File. (if dir
+                                (str dir java.io.File/separator "faraday-" (or thread-id "session") ".md")
+                                p))
+        af (.getAbsoluteFile target)
+        md (transcript->markdown messages)]
+    (spit-fn (.getPath af) md)
+    (.getPath af)))
+
+;; -- taskboard: pure shell pieces ----------------------------------------------
+;; The /board and /task shell commands render the harness taskboard. These are
+;; the pure parts: parsing the /task line and turning task maps into dialog
+;; rows. The impure DB calls live in chat-app, which is the single place ids
+;; become behaviour (the same split commands.clj vs chat-app keeps).
+
+(def task-board-statuses
+  "The canonical board columns, in order, for /board and the boot context."
+  ["open" "in_progress" "blocked" "done" "cancelled"])
+
+(defn parse-task-line
+  "Parse the /task rest text into {:sub .. :positional [..] :flags {..}}.
+  --k v and --k=v are collected as keyword flags (the task flag set: priority,
+  scope, body, status, epic, assignee, dedup-key); bare tokens accumulate, the
+  first being the subcommand. A blank line -> :sub nil (the shell defaults it
+  to list). Pure, so tests pin the flag/positional split."
+  [line]
+  (let [line (str/trim (str line))]
+    (if (str/blank? line)
+      {:sub nil :positional [] :flags {}}
+      (loop [tokens (str/split line #"\s+")
+             pos []
+             flags {}]
+        (if (empty? tokens)
+          {:sub (first pos) :positional (vec (rest pos)) :flags flags}
+          (let [t (first tokens)
+                more (next tokens)]
+            (cond
+              (and (str/starts-with? t "--") (str/includes? t "="))
+              (let [[k v] (str/split (subs t 2) #"=" 2)]
+                (recur more pos (assoc flags (keyword k) v)))
+
+              (str/starts-with? t "--")
+              (let [k (keyword (subs t 2))]
+                (if (seq more)
+                  (recur (next more) pos (assoc flags k (first more)))
+                  (recur more pos (assoc flags k true))))
+
+              :else
+              (recur more (conj pos t) flags))))))))
+
+(defn task-row
+  "One task as a dialog row: the title labels the row; the value carries the
+  id, priority and status. Pure over the task map."
+  [t]
+  {:label (str (:title t))
+   :value (str (:id t) "  [" (or (:priority t) "normal") "]  " (or (:status t) ""))
+   :task-id (:id t)})
+
+(defn board-rows
+  "Dialog rows for /board: every task in canonical column order, so the sheet
+  reads as a kanban grouped by status. Pure over the task list."
+  [tasks]
+  (let [order (zipmap task-board-statuses (range))]
+    (->> tasks
+         (sort-by (fn [t] [(get order (:status t) 99) (or (:priority t) "normal") (:title t)]))
+         (mapv task-row))))
+
+(defn task-detail-rows
+  "Dialog rows for /task show: one row per key field, body/manifest clipped.
+  Pure over the task map."
+  [t]
+  (let [clip (fn [s n] (let [s (str s)] (if (> (count s) n) (str (subs s 0 n) "…") s)))]
+    (vec
+     (concat
+      [{:label "id" :value (str (:id t))}
+       {:label "title" :value (str (:title t))}
+       {:label "status" :value (str (:status t))}
+       {:label "priority" :value (str (:priority t))}]
+      (when (:scope_id t) [{:label "scope" :value (str (:scope_id t))}])
+      (when (:epic_id t) [{:label "epic" :value (str (:epic_id t))}])
+      (when (:assignee t) [{:label "assignee" :value (str (:assignee t))}])
+      (when (seq (str (:body t))) [{:label "body" :value (clip (:body t) 64)}])
+      (when (:manifest t) [{:label "manifest" :value (clip (pr-str (:manifest t)) 64)}])))))
+
 (defn- fold-summary
   "A deterministic one-line summary of the folded entries: counts, errors, and
   the last task, so the model keeps enough context without the raw transcript."
@@ -252,6 +382,46 @@
     (let [a (llm/content->action content)]
       (when (map? a) a))
     (catch Exception _ nil)))
+
+;; -- pure: undo/redo (branch rewind) ------------------------------------------
+;; /undo moves the last user turn — the final :user entry and everything after
+;; it (the assistant answer plus any tool calls/results) — onto a :redo stack;
+;; /redo returns to that branch by popping it back. A new message clears the
+;; :redo stack (the abandoned branch is gone), the same contract an editor's
+;; undo/redo keeps.
+
+(defn last-user-index
+  "Index of the last :user entry in `messages`, or nil when there is no user turn."
+  [messages]
+  (last (keep-indexed (fn [i e] (when (= :user (:role e)) i)) messages)))
+
+(defn undo-turn
+  "Split `messages` into [before rewound]: rewound is the last user turn, the
+  final :user entry and everything after it. Returns nil when there is no user
+  turn to rewind."
+  [messages]
+  (let [v (vec messages)]
+    (when-let [i (last-user-index v)]
+      [(subvec v 0 i) (subvec v i)])))
+
+(defn history-undo
+  "Rewind the last turn of a history map {:messages [...] :redo [branch ...]}:
+  move the last user turn (and everything after it) onto the top of :redo.
+  Returns the new history map, or nil when there is nothing to rewind."
+  [{:keys [messages] :as history}]
+  (when-let [[before rewound] (undo-turn messages)]
+    (assoc history
+           :messages before
+           :redo (conj (vec (:redo history)) rewound))))
+
+(defn history-redo
+  "Return to the branch the last rewind left: pop the top of :redo back onto
+  :messages. Returns the new history map, or nil when nothing was rewound."
+  [{:keys [messages redo] :as history}]
+  (when (seq redo)
+    (assoc history
+           :messages (into (vec messages) (peek redo))
+           :redo (pop redo))))
 
 (def ^:dynamic *interrupt*
   "Bound by chat-session around run-turn! on the worker thread; tool executors
@@ -380,7 +550,11 @@
                                                   :nix-flake nix-flake
                                                   :egress egress})]
                              (swap! state assoc :pool p)
-                             p)))]
+                             p)))
+        recycle-pool! (fn []
+                        (when-let [p (:pool @state)]
+                          (try (sb-close-pool! p) (catch Exception _ nil))
+                          (swap! state dissoc :pool)))]
     {:exec (fn [name args]
              (cond
                (not (or (contains? #{"run_shell" "shell" "exec"} name)
@@ -401,15 +575,25 @@
                            r (sb-pool-exec p (argv->cmd argv) :timeout-ms 120000 :cwd workspace :interrupt *interrupt*)]
                        (if (:interrupted? r)
                          {:status :error :error "interrupted" :interrupted? true}
-                         {:status (if (zero? (:exit r)) :ok :error)
-                          :exit (:exit r)
-                          :stdout (:stdout r)
-                          :stderr (:stderr r)}))
+                         (if (and (= 255 (:exit r))
+                                  (str/blank? (str (:stdout r)))
+                                  (str/blank? (str (:stderr r))))
+                           ;; ssh transport failure: the VM is unreachable. Drop
+                           ;; the dead pool so the next call boots a fresh VM.
+                           (do (recycle-pool!)
+                               {:status :error
+                                :error "sandbox VM unreachable (recycled); retry"
+                                :fatal? false})
+                           {:status (if (zero? (:exit r)) :ok :error)
+                            :exit (:exit r)
+                            :stdout (:stdout r)
+                            :stderr (:stderr r)})))
                      (catch Exception e
                        (let [msg (str "sandbox exec failed (" (or (ex-message e) "?") ")")
                              boot? (nil? (:pool @state))]
-                         (when boot?
-                           (swap! state assoc :failed? true :boot-error msg))
+                         (if boot?
+                           (swap! state assoc :failed? true :boot-error msg)
+                           (recycle-pool!))
                          {:status :error :error msg :fatal? boot?})))))))
      :close (fn []
               (when-let [p (:pool @state)]
@@ -423,12 +607,16 @@
   repair + escalate fallback. `primary` and `strong` are provider cfgs; returns
   a canonical action map ({:tool-call ..} {:tool-calls [..]} {:done ..}) or a
   plain-text string (never nil). On a null result it retries with repair
-  guidance, then escalates to the strong provider."
-  [primary strong messages]
+  guidance, then escalates to the strong provider. `usage` (a ratom) accumulates
+  every billed response's token usage across retries via llm/add-usage."
+  [primary strong messages usage]
   (let [try-cfg (fn [cfg extra]
                   (let [msgs (if extra (conj messages {:role "user" :content extra}) messages)]
-                    (try (llm/completion->action (assoc cfg :tools (tools/openai-tools)) msgs)
-                         (catch Exception _ nil))))]
+                    (try
+                      (let [r (llm/completion->result (assoc cfg :tools (tools/openai-tools)) msgs)]
+                        (swap! usage llm/add-usage (:usage r))
+                        (:action r))
+                      (catch Exception _ nil))))]
     (or (try-cfg primary nil)
         (try-cfg primary (repair-note))
         (try-cfg strong (str (repair-note) " Escalate: reason carefully."))
@@ -599,42 +787,64 @@
 (defn- transcript-scroll!
   "Scroll the transcript viewport by what `ev` implies. The composer entry is
   always focused, so arrow/page keys never reach the :scroll widget (a sibling);
-  they bubble here instead and we drive the laid-out scroll node directly."
-  [ev]
+  they bubble here instead and we drive the laid-out scroll node directly.
+  Scrolling up, or Home, detaches `follow?` (stop auto-pinning); End, or
+  scrolling down to the bottom, re-arms it."
+  [ev follow?]
   (let [{:keys [tree root]} @@#'glimmer-tui.core/app]
     (when (and tree root)
       (when-let [n (some (fn [x] (when (= :scroll (w/container-kind (:tag x))) x))
                          (w/walk tree))]
         (when-let [wid (w/find-widget root (:id n))]
           (let [page (max 1 (dec (max 1 (:h (:viewport n) 0))))
-                dy (cond
-                     (k/match? ev "up") -1
-                     (k/match? ev "down") 1
-                     (k/match? ev "pgup") (- page)
-                     (k/match? ev "pgdn") page
-                     :else nil)]
-            (when (some? dy)
-              (scroll/scroll-by! wid n 0 dy))))))))
+                move
+                (cond
+                  (k/match? ev "up") [:by -1]
+                  (k/match? ev "down") [:by 1]
+                  (k/match? ev "pgup") [:by (- page)]
+                  ;; Home jumps to the top and detaches: the operator wants to
+                  ;; read the history
+                  (k/match? ev "home") [:to-top]
+                  ;; End jumps to the bottom and re-follows
+                  (k/match? ev "end") [:to-bottom]
+                  ;; PgDn pages while following; detached it jumps back to the
+                  ;; bottom and re-follows, instead of paging screen by screen
+                  (k/match? ev "pgdn") (if @follow? [:by page] [:to-bottom])
+                  :else nil)]
+            (when move
+              (let [kind (first move)
+                    moved? (case kind
+                             :by (scroll/scroll-by! wid n 0 (second move))
+                             :to-top (scroll/scroll-to! wid n 0 0)
+                             :to-bottom (scroll/scroll-to! wid n 0 2147483647))]
+                (when (or (= :to-top kind)
+                          (and (= :by kind) (neg? (second move))))
+                  (reset! follow? false))
+                (when (or (= :to-bottom kind)
+                          (and (= :by kind) (pos? (second move)) (not moved?)))
+                  (reset! follow? true))))))))))
 
-(defn- wrap-width
-  "Columns to wrap transcript text to: the terminal width (guarded) minus the
-  room the scrollbar and user prefix take; falls back to 92."
+  (defn- wrap-width
+  "Columns to wrap transcript text to. Live terminal width wins (minus the
+  scrollbar column and a one-column inset); an explicit :wrap (--wrap flag or
+  chat.wrap) is used literally; headless falls back to 92."
   [opts]
-  (let [cols (or (:wrap opts)
-                 (try (let [[_ c] (jolt.host/term-size)] c)
-                      (catch Throwable _ nil))
-                 92)]
-    (max 24 (- (long cols) 8))))
+  (let [explicit (:wrap opts)
+        live (try (let [[_ c] (jolt.host/term-size)] c)
+                  (catch Throwable _ nil))
+        cols (or explicit live 92)]
+    (max 24 (- (long cols) (if (and live (not explicit)) 2 0)))))
 
 (defn markdown-segments
   "Split assistant markdown into render segments via jolt-markdown. Prose
   segments carry :spans (inline strong/em/strike/code/link) plus the plain
   :text for previews and line counts; fenced code stays verbatim. Numbered
-  items render as plain text, keeping their number."
+  items keep their number as a render prefix; task lists, rules and tables
+  keep their block kind."
   [text]
   (mapv (fn [blk]
           (case (:type blk)
-            :heading {:t :line :kind :heading
+            :heading {:t :heading :kind :heading :level (:level blk)
                       :text (md/spans-text (:spans blk))
                       :spans (:spans blk)}
             :quote {:t :line :kind :quote
@@ -643,11 +853,15 @@
             :bullet {:t :line :kind :bullet
                      :text (md/spans-text (:spans blk))
                      :spans (:spans blk)}
-            :numbered (let [spans (into [{:text (str (:n blk) ". ") :style nil}]
-                                        (:spans blk))]
-                        {:t :line :kind :text
-                         :text (md/spans-text spans)
-                         :spans spans})
+            :task {:t :line :kind :task
+                   :checked? (:checked? blk)
+                   :text (md/spans-text (:spans blk))
+                   :spans (:spans blk)}
+            :numbered {:t :line :kind :numbered :n (:n blk)
+                       :text (md/spans-text (:spans blk))
+                       :spans (:spans blk)}
+            :hr {:t :hr}
+            :table {:t :table :rows (:rows blk) :aligns (:aligns blk)}
             :text {:t :line :kind :text
                    :text (md/spans-text (:spans blk))
                    :spans (:spans blk)}
@@ -661,10 +875,20 @@
   [text]
   (vec
    (mapcat (fn [seg]
-             (if (= :code (:t seg))
-               (map (fn [l] [:code l]) (:lines seg))
-               [[(:kind seg) (:text seg)]]))
+             (case (:t seg)
+               :code (map (fn [l] [:code l]) (:lines seg))
+               :hr [[:hr ""]]
+               :table [[:table (str/join " | " (map #(str/join " " %) (:rows seg)))]]
+               (case (:kind seg)
+                 :numbered [[:numbered (str (:n seg) ". " (:text seg))]]
+                 [[(:kind seg) (:text seg)]])))
            (markdown-segments text))))
+
+(defn- deref-thread
+  "A session thread-id may be a plain string or an atom (the chat shell switches
+  it on /fork); return the current value either way."
+  [thread-id]
+  (if (instance? clojure.lang.IDeref thread-id) @thread-id thread-id))
 
 (defn chat-session
   "A headless chat: owns the transcript and drives the tool loop. Returns
@@ -674,17 +898,17 @@
   interrupt! asks a running turn to stop at the next step boundary."
   [{:keys [call exec system max-turns max-stall stores thread-id]}]
   (let [state (r/atom {:messages (or (when (and stores thread-id)
-                                      (try (session/resume stores thread-id)
+                                      (try (session/resume stores (deref-thread thread-id))
                                            (catch Exception _ nil)))
                                     [])
-                       :busy? false :error nil})
+                       :busy? false :error nil :redo []})
         interrupt (atom false)
         send! (fn [text]
                 (let [text (str/trim (str text))]
                   (when (and (seq text) (not (:busy? @state)))
                     (let [es (conj (:messages @state) {:role :user :text text})]
                       (reset! interrupt false)
-                      (swap! state assoc :busy? true :error nil :messages es)
+                      (swap! state assoc :busy? true :error nil :messages es :redo [])
                       (future
                         (binding [*interrupt* interrupt]
                           (run-turn! {:call call :exec exec :system system
@@ -692,7 +916,7 @@
                                       :interrupt interrupt}
                                      state es))
                         (when (and stores thread-id)
-                          (try (session/persist! stores thread-id (:messages @state))
+                          (try (session/persist! stores (deref-thread thread-id) (:messages @state))
                                (catch Exception _ nil))))))))]
     {:state state :send! send! :interrupt! (fn [] (reset! interrupt true))}))
 
@@ -708,12 +932,18 @@
     :assistant
     (mapcat
      (fn [seg]
-       (case (:t seg)
+       (conj (vec (case (:t seg)
          :code [{:t :code :role :assistant
                  :lines (vec (mapcat #(hard-wrap % wrap) (:lines seg)))}]
+         :hr [{:t :hr :role :assistant}]
+         :table [{:t :table :role :assistant
+                  :rows (:rows seg) :aligns (:aligns seg) :width wrap}]
+         :heading [{:t :heading :role :assistant :level (or (:level seg) 1)
+                    :lines (md/wrap-spans (:spans seg) wrap)}]
          (let [lines (md/wrap-spans (:spans seg) wrap)
                kind (:kind seg)]
-           (if (= :bullet kind)
+           (cond
+             (= :bullet kind)
              (map-indexed
               (fn [i line]
                 {:t :line :role :assistant
@@ -721,16 +951,37 @@
                  :text (md/spans-text line)
                  :spans line})
               lines)
+             (= :task kind)
+             (map-indexed
+              (fn [i line]
+                (cond-> {:t :line :role :assistant
+                         :kind (if (zero? i) :task :task-cont)
+                         :text (md/spans-text line)
+                         :spans line}
+                  (zero? i) (assoc :checked? (:checked? seg))))
+              lines)
+             (= :numbered kind)
+             (map-indexed
+              (fn [i line]
+                {:t :line :role :assistant
+                 :kind (if (zero? i) :numbered :numbered-cont)
+                 :num (:n seg)
+                 :text (md/spans-text line)
+                 :spans line})
+              lines)
+             :else
              (map (fn [line] {:t :line :role :assistant :kind kind
                               :text (md/spans-text line)
                               :spans line})
-                  lines)))))
+                  lines))))) {:t :spacer}))
      (markdown-segments (:text e)))
 
     :tool-call
     (map (fn [line] {:t :line :role :tool-call :kind :text :text line})
-         (word-wrap (str "$" (when (seq (:args e))
-                               (str " " (str/join " " (map str (:args e))))))
+         (word-wrap (let [argv (seq (:argv (:args e)))
+                          txt (str (or (:name e) "")
+                                   (when argv (str " " (str/join " " (map str argv)))))]
+                      (if (str/blank? txt) "tool-call" txt))
                     wrap))
 
     :tool-result
@@ -750,81 +1001,161 @@
   (->> messages
        (mapcat #(entry-segments % wrap))
        (remove (fn [seg]
-                 (and (= :line (:t seg))
-                      (str/blank? (str (:text seg))))))
+                 (or (= :spacer (:t seg))
+                     (and (= :line (:t seg))
+                          (str/blank? (str (:text seg)))))))
        vec))
 
-(defn- line-style
+  (defn- line-style
   "Colour/style props for one transcript line."
-  [pal role kind]
-  (case role
-    :user {:color (:user pal) :bold true}
-    :assistant (case kind
-                 :heading {:color (:heading pal) :bold true}
-                 :quote {:color (:muted pal) :dim true}
-                 :bullet {:color (:foreground pal)}
-                 {:color (:foreground pal)})
-    :tool-call {:color (:tool pal) :bold true}
-    :tool-result {:color (:muted pal) :dim true}
-    {:color (:foreground pal)}))
-
-(defn- line-prefix
   [role kind]
   (case role
-    :user "you> "
-    :tool-call "  → "
-    :tool-result "    "
+    :user {:color (themes/color :user) :bold true}
     :assistant (case kind
-                 :heading "▍ "
-                 :quote "│ "
-                 :bullet "  • "
-                 :bullet-cont "    "
-                 "")
-    ""))
+                 :heading {:color (themes/color :heading) :bold true}
+                 :quote {:color (themes/color :muted) :dim true}
+                 :bullet {:color (themes/color :body)}
+                 {:color (themes/color :body)})
+    :tool-call {:color (themes/color :tool) :bold true}
+    :tool-result {:color (themes/color :muted) :dim true}
+    {:color (themes/color :body)}))
+
+(defn- line-prefix
+  ([role kind] (line-prefix role kind nil nil))
+  ([role kind checked?] (line-prefix role kind checked? nil))
+  ([role kind checked? num]
+   (case role
+     :user "you> "
+     :tool-call "  → "
+     :tool-result "    "
+     :assistant (case kind
+                  :heading "▍ "
+                  :quote "│ "
+                  :bullet "  • "
+                  :bullet-cont "    "
+                  :task (if checked? "  ☑ " "  ☐ ")
+                  :task-cont "    "
+                  :numbered (str "  " num ". ")
+                  :numbered-cont (apply str (repeat (+ 4 (count (str num))) " "))
+                  "")
+     "")))
 
 (defn- span-props
   "Style props for one inline span: the line's own style by default, overlaid
   with the span's emphasis. glimmer-tui has no italic or strikethrough, so em
   renders underlined and strikethrough renders dim (the terminal conventions)."
-  [pal base {:keys [style]}]
+  [base {:keys [style]}]
   (let [style (or style #{})]
     (cond-> base
-      (:strong style) (assoc :bold true)
+      (:strong style) (assoc :bold true :color (themes/color :strong))
       (:em style)     (assoc :underline true)
       (:strike style) (assoc :dim true)
-      (:code style)   (assoc :color (:code pal))
-      (:link style)   (assoc :color (:accent pal) :underline true))))
+      (:code style)   (assoc :color (themes/color :inline-code))
+      (:link style)   (assoc :color (themes/color :link) :underline true))))
 
 (defn- spans-hiccup
   "A prose line as hiccup: an optional prefix label (bullet/heading/quote
   marker) followed by one label per span, so inline styles render per-span."
-  [pal role kind prefix spans]
-  (let [base (line-style pal role kind)]
+  [role kind prefix spans]
+  (let [base (line-style role kind)]
     (if (and (empty? prefix) (= 1 (count spans)))
       (let [s (first spans)]
-        [:label (assoc (span-props pal base s) :label (:text s))])
+        [:label (assoc (span-props base s) :label (:text s))])
       (into [:hbox {:spacing 0}]
             (concat
              (when (seq prefix)
                [[:label (assoc base :label prefix)]])
              (map (fn [s]
-                    [:label (assoc (span-props pal base s) :label (:text s))])
+                    [:label (assoc (span-props base s) :label (:text s))])
                   spans))))))
 
-(defn segment-hiccup
+(defn- pad-cell
+  [s w align]
+  (let [s (str s)
+        pad (max 0 (- w (count s)))]
+    (case align
+      :right (str (apply str (repeat pad " ")) s)
+      :center (let [l (quot pad 2) r (- pad l)]
+                (str (apply str (repeat l " ")) s (apply str (repeat r " "))))
+      (str s (apply str (repeat pad " "))))))
+
+(defn- table-lines
+  "Aligned text lines for a markdown table's :rows/:aligns, no wider than
+  `width`. Line 0 is the header, line 1 the divider."
+  [rows aligns width]
+  (let [rows (vec rows)
+        ncol (apply max 1 (map count rows))
+        aligns (vec (take ncol (concat aligns (repeat :left))))
+        maxw (max 6 (- width 6))
+        desired (mapv (fn [c]
+                        (min maxw (max 4 (apply max 4 (map #(count (str (nth % c ""))) rows)))))
+                      (range ncol))
+        seps (* 2 (max 0 (dec ncol)))
+        colw (if (<= (+ (reduce + desired) seps) width)
+               desired
+               (loop [ws desired budget (- (+ (reduce + desired) seps) width)]
+                 (if (or (zero? budget) (every? #(<= % 4) ws))
+                   ws
+                   (let [i (first (apply max-key second (map-indexed vector ws)))]
+                     (recur (update ws i dec) (dec budget))))))
+        cell-lines (mapv (fn [row]
+                           (mapv (fn [c] (hard-wrap (str (nth row c "")) (colw c)))
+                                 (range ncol)))
+                         rows)
+        row-h (mapv (fn [cells] (apply max 1 (map count cells))) cell-lines)
+        align-cell (fn [s c] (pad-cell s (colw c) (nth aligns c :left)))
+        render-row (fn [cells h]
+                     (mapv (fn [ln]
+                             (str/join "  "
+                                       (map-indexed (fn [c _]
+                                                      (align-cell (nth (nth cells c) ln "")
+                                                                  c))
+                                                    (range ncol))))
+                           (range h)))
+        divider (str/join "  " (mapv (fn [c] (apply str (repeat (colw c) "─"))) (range ncol)))]
+    (vec (concat
+          (render-row (first cell-lines) (row-h 0))
+          [divider]
+          (mapcat (fn [i] (render-row (cell-lines i) (row-h i)))
+                  (range 1 (count cell-lines)))))))
+
+  (defn- table-hiccup
+  [seg]
+  (let [lines (table-lines (:rows seg) (:aligns seg) (:width seg))]
+    [:box {:bg (themes/color :code-slab) :hexpand true}
+     (into [:vbox {:spacing 0 :padding [0 1 0 1]}]
+           (map-indexed
+            (fn [i line]
+              [:label {:label line
+                       :color (cond
+                                (zero? i) (themes/color :heading)
+                                (= 1 i) (themes/color :muted)
+                                :else (themes/color :inline-code))
+                       :bold (zero? i)}])
+            lines))]))
+
+  (defn segment-hiccup
   "One render segment as hiccup."
-  [pal seg]
-  (if (= :code (:t seg))
-    [:box {:bg (:slab pal) :hexpand true}
-     (into [:vbox {:spacing 0 :padding [1 2 1 1]}]
-           (map (fn [line]
-                  [:label {:label line :color (:code pal)}])
-                (:lines seg)))]
-    (let [{:keys [role kind text spans]} seg]
+  [seg]
+  (case (:t seg)
+    :code [:box {:bg (themes/color :code-slab) :hexpand true}
+           (into [:vbox {:spacing 0 :padding [0 1 0 1]}]
+                 (map (fn [line]
+                        [:label {:label line :color (themes/color :inline-code)}])
+                      (:lines seg)))]
+    :hr [:separator {:char "─" :color (themes/color :muted) :hexpand true}]
+    :table (table-hiccup seg)
+    :spacer [:label {:label " "}]
+    :heading [:box {:bg (themes/heading-band (:level seg)) :hexpand true}
+              (into [:vbox {:spacing 0 :padding [0 1 0 1]}]
+                    (map (fn [line]
+                           (spans-hiccup :assistant :heading "" line))
+                         (:lines seg)))]
+    (let [{:keys [role kind text spans checked? num]} seg]
       (if (and (= role :assistant) (seq spans))
-        (spans-hiccup pal role kind (line-prefix role kind) spans)
-        [:label (assoc (line-style pal role kind)
-                       :label (str (line-prefix role kind) text))]))))
+        (spans-hiccup role kind (line-prefix role kind checked? num) spans)
+        [:label (assoc (line-style role kind)
+                       :label (str (line-prefix role kind checked? num) text))]))))
 
 ;; -- folding -----------------------------------------------------------------
 ;; Tool results and long code blocks are the bulky, low-signal parts of a
@@ -840,7 +1171,7 @@
   "A button that toggles fold key `k`; `open?` picks the glyph."
   [expanded k open? label]
   [:button {:label (str (if open? "▾ " "▸ ") label)
-            :color (:muted palette)
+            :color (themes/color :muted)
             :on-click #(toggle-expanded! expanded k)}])
 
 (defn- tool-result-summary
@@ -856,15 +1187,15 @@
   [e wrap]
   (let [lines (->> (str/split-lines (str (or (:text e) "")))
                    (mapcat #(hard-wrap % wrap)))]
-    [:box {:bg (:slab palette) :hexpand true}
-     (into [:vbox {:spacing 0 :padding [0 2 1 1]}]
-           (map (fn [line] [:label {:label line :color (:code palette)}]) lines))]))
+    [:box {:bg (themes/color :code-slab) :hexpand true}
+     (into [:vbox {:spacing 0 :padding [0 1 0 1]}]
+           (map (fn [line] [:label {:label line :color (themes/color :inline-code)}]) lines))]))
 
 (defn- seg-line-count
   "Rendered line count of entry-segments output: prose segments are one line
   each, a code segment counts its verbatim lines."
   [segs]
-  (reduce (fn [n seg] (+ n (if (= :code (:t seg)) (count (:lines seg)) 1))) 0 segs))
+  (reduce (fn [n seg] (+ n (if (contains? #{:code :heading} (:t seg)) (count (:lines seg)) 1))) 0 segs))
 
 (defn- assistant-summary
   "Fold header for a long assistant answer: its line count and a one-line
@@ -875,14 +1206,59 @@
                   (if (> (count preview) 40) (str (subs preview 0 40) "…") preview))]
     (str "assistant · " lines " lines" (when preview (str " · " preview)))))
 
+(defn- group-tool-steps
+  "Pair each :tool-call with the :tool-result that immediately follows it into
+  one {:role :tool-step :call .. :result ..} entry; a call or result with no
+  pair is left as-is. Greedy left-to-right, so earlier pairs keep their
+  position as the transcript appends."
+  [messages]
+  (loop [ms (seq messages) out []]
+    (if-not ms
+      (vec out)
+      (let [e (first ms)
+            r (second ms)]
+        (if (and (= :tool-call (:role e))
+                 (= :tool-result (:role r))
+                 (= (:name e) (:name r)))
+          (recur (nnext ms) (conj out {:role :tool-step :call e :result r}))
+          (recur (next ms) (conj out e)))))))
+
+(defn- tool-step-summary
+  "Fold header for one tool step: tool name, a clipped view of the argv, then
+  status/exit/line-count. The command leads so it stays readable while the
+  output is folded."
+  [call result]
+  (let [tool-name (str (:name call))
+        argv (seq (:argv (:args call)))
+        cmd (when argv (str/join " " (map str argv)))
+        cmd (when (and cmd (seq cmd))
+              (if (> (count cmd) 40) (str (subs cmd 0 40) "…") cmd))
+        lines (count (str/split-lines (str (or (:text result) ""))))]
+    (str "→ " tool-name
+         (when cmd (str " " cmd))
+         " · " (name (or (:status result) :?))
+         (when (some? (:exit result)) (str " · exit " (:exit result)))
+         " · " lines " lines")))
+
 (defn- entry-hiccup
-  "One conversation entry as hiccup: tool results, long code blocks and long
-  assistant prose are all foldable (collapsed to a header; Enter/click opens).
-  The latest assistant answer stays open so the operator reads it whole; only
-  earlier long answers fold. `i` is the entry index — stable because messages
-  only append."
+  "One conversation entry as hiccup: tool steps, tool results, long code blocks
+  and long assistant prose are all foldable (collapsed to a header; Enter/click
+  opens). The latest assistant answer stays open so the operator reads it whole;
+  only earlier long answers fold. `i` is the entry index — stable because
+  messages only append."
   [expanded wrap last-assistant? i e]
   (case (:role e)
+    :tool-step
+    (let [{:keys [call result]} e
+          open? (contains? @expanded i)]
+      [:vbox {:spacing 0}
+       (fold-header expanded i open? (tool-step-summary call result))
+       (when open?
+         [:vbox {:spacing 0}
+          (into [:vbox {:spacing 0}]
+                (map segment-hiccup (entry-segments call wrap)))
+          (tool-result-body result wrap)])])
+
     :tool-result
     (let [open? (contains? @expanded i)]
       [:vbox {:spacing 0}
@@ -899,21 +1275,28 @@
           [:vbox {:spacing 0}
            (fold-header expanded k open? (assistant-summary segs (seg-line-count segs)))
            (when open?
-             (into [:vbox {:spacing 0}] (map (partial segment-hiccup palette) segs)))])
+             (into [:vbox {:spacing 0}] (map segment-hiccup segs)))])
         (into [:vbox {:spacing 0}]
               (map-indexed
                (fn [ci seg]
-                 (if (and (= :code (:t seg)) (> (count (:lines seg)) 12))
+                 (if (and (not last-assistant?)
+                         (= :code (:t seg))
+                         (> (count (:lines seg)) 12))
                    (let [k [i :code ci]
                          open? (contains? @expanded k)]
                      [:vbox {:spacing 0}
                       (fold-header expanded k open? (str "code · " (count (:lines seg)) " lines"))
-                      (when open? (segment-hiccup palette seg))])
-                   (segment-hiccup palette seg)))
+                      (when open? (segment-hiccup seg))])
+                   (segment-hiccup seg)))
                segs))))
 
+    :user
+    [:box {:bg (themes/color :user-block) :hexpand true}
+     (into [:vbox {:spacing 0 :padding [0 1 0 1]}]
+           (map segment-hiccup (entry-segments e wrap)))]
+
     (into [:vbox {:spacing 0}]
-          (map (partial segment-hiccup palette) (entry-segments e wrap)))))
+          (map segment-hiccup (entry-segments e wrap)))))
 
 ;; -- clipboard (OSC 52) ------------------------------------------------------
 ;; Native terminal copy (drag-select / Ctrl+Shift+C) works again because faraday
@@ -974,13 +1357,15 @@
 (defn- transcript-view
   "The transcript vbox hiccup for `messages`. Pure in its args, so a cached
   caller can reuse the same hiccup object while the transcript is unchanged
-  (scrolling only moves the viewport; it never rebuilds the transcript)."
+  (scrolling only moves the viewport; it never rebuilds the transcript). Tool
+  calls and their results group into one foldable step."
   [messages expanded wrap]
-  (let [last-assistant-idx (last (keep-indexed (fn [i e] (when (= :assistant (:role e)) i)) messages))]
+  (let [grouped (group-tool-steps messages)
+        last-assistant-idx (last (keep-indexed (fn [i e] (when (= :assistant (:role e)) i)) grouped))]
     (into [:vbox {:spacing 0 :padding [1 2 1 1]}]
-          (if (empty? messages)
+          (if (empty? grouped)
             [[:label {:label "Type a task; faraday runs tools and answers." :dim true}]]
-            (map-indexed (fn [i e] (entry-hiccup expanded wrap (= i last-assistant-idx) i e)) messages)))))
+            (map-indexed (fn [i e] (entry-hiccup expanded wrap (= i last-assistant-idx) i e)) grouped)))))
 
 (defonce ^:private transcript-cache (atom nil))
 (defonce ^:private transcript-key (atom nil))
@@ -997,6 +1382,63 @@
         (reset! transcript-cache h)
         h))))
 
+(defn command-dropdown
+  "The / command picker drawn above the composer: up to `max-rows` matching
+  commands, the selected row highlighted, and a footer of picker keys. Pure over
+  the visible slice from commands/visible-window, so the selection stays pinned
+  instead of spilling past a short terminal."
+  [matches selected]
+  (let [max-rows 8
+        [start n] (cmd/visible-window matches selected max-rows)
+        shown (subvec matches start (+ start n))]
+    [:vbox {:bg (themes/color :canvas) :margin [0 1 0 0] :spacing 0}
+     (if (seq shown)
+       (into [:vbox {:spacing 0}]
+             (map-indexed
+              (fn [i c]
+                (let [sel? (= (+ start i) selected)
+                      name-color (if sel? (themes/color :accent) (themes/color :body))]
+                  [:hbox {:hexpand true :spacing 2 :padding [0 1]}
+                   [:hbox {:spacing 0}
+                    [:label {:label " "
+                             :bg (if sel? (themes/color :selection) (themes/color :canvas))}]
+                    [:label {:label (:matched c)
+                             :color name-color
+                             :bold sel?
+                             :bg (themes/color :canvas)}]]
+                   [:label {:label (:description c)
+                            :color (themes/color :chrome)
+                            :halign :end :hexpand true
+                            :bg (themes/color :canvas)}]]))
+              shown))
+       [[:label {:label "  no matching command" :color (themes/color :muted) :dim true}]])
+     [:hbox {:padding [0 1]}
+      [:label {:label (str (count matches) " command"
+                           (when (not= 1 (count matches)) "s"))
+               :color (themes/color :muted) :dim true}]
+      [:label {:label "↑↓ choose · tab complete · enter run · esc close"
+               :color (themes/color :muted) :dim true :halign :end :hexpand true}]]]))
+
+(defn summarize-transcript
+  "Compress a transcript string into a short standing summary via a summarizer
+  cfg (base-url/api-key/model). Low effort; returns the trimmed summary text.
+  When `usage` (a ratom) is supplied, the summarizer call's token usage is
+  accumulated into it, so /cost counts compaction too. Throws on
+  transport/model failure so callers can flash the error."
+  [cfg transcript & [usage]]
+  (let [resp (json/read-str
+              (llm/curl-http
+               (assoc cfg :reasoning "low")
+               [{:role "user"
+                 :content (str "Compress the faraday session transcript below into a short "
+                               "standing summary: what the operator asked, what was done, "
+                               "what remains open. Answer with only the summary, no preamble.\n\n"
+                               transcript)}])
+              :key-fn keyword)]
+    (when usage
+      (swap! usage llm/add-usage (llm/response-usage resp)))
+    (str/trim (str (get-in resp [:choices 0 :message :content])))))
+
 (defn chat-app
   "The agentic chat component. `opts` accepts :system, :wrap, :model, :base-url,
   :api-key (the latter three override config/resolve-chat), :max-turns, and the
@@ -1005,17 +1447,23 @@
   component fn to hand to ui/run."
   [opts]
   (let [full-cfg (config/load-config opts)
-        cfg (config/resolve-chat full-cfg opts)
+        cfg (r/atom (config/resolve-chat full-cfg opts))
         strong (config/resolve-provider full-cfg :deepseek-pro opts)
         wrap (wrap-width opts)
-        pal palette
         breaker (atom {:failures 0 :open? false})
+        usage (r/atom {:prompt_tokens 0 :completion_tokens 0 :total_tokens 0 :requests 0})
         call (or (:call opts)
-                 (with-circuit-breaker breaker #(model-step cfg strong %)))
+                 (with-circuit-breaker breaker #(model-step @cfg strong % usage)))
         exec (or (:exec opts) host-exec)
         max-turns (or (:max-turns opts) 12)
         stores (:session opts)
         thread-id (:thread-id opts)
+        thread-ref (atom thread-id)
+        cwd (or (:cwd opts) (System/getProperty "user.dir"))
+        proj-root (:proj-root opts)
+        harness (:harness opts)
+        board (:board opts)
+        board-ready? (boolean (and board harness))
         facts (when (and stores thread-id)
                 (try (session/salient stores thread-id) (catch Exception _ nil)))
         system (system-with-context
@@ -1023,19 +1471,40 @@
                 (cond-> []
                   (:boot-context opts) (into (:boot-context opts))
                   (:sandbox-context opts) (conj (:sandbox-context opts))
-                  (:context cfg) (into (:context cfg)))
+                  (:context @cfg) (into (:context @cfg)))
                 facts)
         sess (chat-session {:call call :exec exec :system system :max-turns max-turns
-                            :stores stores :thread-id thread-id})
+                            :stores stores :thread-id thread-ref})
         state (:state sess)
         interrupt! (:interrupt! sess)
         pending? (r/atom false)
+        follow? (r/atom true)
+        last-messages (atom (:messages @state))
+        was-busy? (atom (:busy? @state))
         draft (r/atom "")
+        picker (r/atom {:open? false :selected 0})
+        toast (r/atom nil)
+        dialog (r/atom nil)
+        settings-cfg (r/atom full-cfg)
+        settings-path (or (:settings-file opts) (config/settings-file))
         hist-idx (r/atom nil)
         tick (r/atom 0)
         _ (tui/every! 100
                       (fn []
                         (when (:busy? @state) (swap! tick inc))
+                        (let [msgs (:messages @state)
+                              busy? (:busy? @state)]
+                          (when (and @follow? (not (identical? msgs @last-messages)))
+                            (reset! last-messages msgs)
+                            (scroll-to-bottom!))
+                          ;; a round that just finished re-pins the transcript to
+                          ;; the bottom and re-arms follow, so the fresh answer is
+                          ;; always on screen even if the operator scrolled up
+                          ;; while it was working
+                          (when (and @was-busy? (not busy?))
+                            (reset! follow? true)
+                            (scroll-to-bottom!))
+                          (reset! was-busy? busy?))
                         (when (and @pending? (not (:busy? @state)))
                           (reset! pending? false)
                           (let [text (str/trim (str @draft))]
@@ -1044,7 +1513,6 @@
                               (reset! hist-idx nil)
                               (scroll-to-bottom!)
                               ((:send! sess) text))))))
-        model (or (:model cfg) "faraday")
         expanded (r/atom #{})
         copied (r/atom nil)
         user-texts
@@ -1054,6 +1522,7 @@
           (let [texts (user-texts)
                 n (count texts)]
             (when (pos? n)
+              (swap! picker assoc :open? false)
               (case dir
                 :prev (let [i (if (nil? @hist-idx) (dec n) (max 0 (dec @hist-idx)))]
                         (reset! hist-idx i)
@@ -1071,6 +1540,503 @@
             (emit-clipboard! text)
             (reset! copied (str "copied " (count text) " chars"))
             (tui/after! 1500 #(reset! copied nil))))
+        flash!
+        (fn [msg]
+          (reset! toast msg)
+          (tui/after! 2500 #(reset! toast nil)))
+        persist-transcript!
+        ;; Persist the current transcript to the session stores (the checkpoint
+        ;; wins on resume, so /undo and /redo stick across restarts).
+        (fn []
+          (when (and stores @thread-ref)
+            (try (session/persist! stores @thread-ref (:messages @state))
+                 (catch Exception _ nil))))
+        save-settings!
+        ;; Persist the edited leaf to the layer that should own it (project file
+        ;; when in a real project, else the user file), so /settings, /models and
+        ;; /think changes take effect under project > user precedence without
+        ;; baking the rest of the resolved map into that file. Then re-resolve the
+        ;; live chat cfg (CLI/opts overrides still win in resolve-chat).
+        (fn [m p]
+          (reset! settings-cfg m)
+          (try
+            (let [{:keys [path project?]} (settings/edit-target-file opts)]
+              (settings/write-leaf! path p (get-in m p))
+              (flash! (if project? "saved settings (project)" "saved settings")))
+            (catch Exception e
+              (flash! (str "save failed: " (.getMessage e)))))
+          (reset! cfg (config/resolve-chat m opts)))
+        apply-settings!
+        ;; Persist a new settings map and refresh the dialog's rows in place.
+        (fn [m p]
+          (save-settings! m p)
+          (swap! dialog assoc :items (settings/rows-for-map m)))
+        commit-edit!
+        ;; Enter in the value editor: apply the typed string at the row's path,
+        ;; coercing by its type, then return to the list.
+        (fn []
+          (when-let [ed (:editor @dialog)]
+            (apply-settings! (settings/set-value-at-path @settings-cfg
+                                                          (:path ed)
+                                                          (:value ed)
+                                                          (:type ed))
+                             (:path ed))
+            (swap! dialog dissoc :editor)))
+        cancel-edit!
+        ;; Esc in the value editor: drop the draft, back to the list.
+        (fn [] (swap! dialog dissoc :editor))
+        board-tasks
+        ;; The current project's tasks, or nil when the board is not ready.
+        (fn [] (when board-ready?
+                 (try (h/task-list @harness (:id board)) (catch Exception _ nil))))
+        model-rows
+        ;; /models: one row per provider alias, the active chat provider checked.
+        (fn []
+          (let [providers (:providers @settings-cfg)
+                active (or (get-in @settings-cfg [:chat :provider]) :deepseek)]
+            (mapv (fn [[alias p]]
+                    {:label (str (if (= alias active) "✓ " "  ") (name alias))
+                     :value (str (or (:model p) "") " @ " (or (:base-url p) ""))
+                     :id alias})
+                  (sort-by key providers))))
+        effort-rows
+        ;; /think: the reasoning rungs the llm effort knob accepts (low/high/max).
+        (fn []
+          (let [active (or (:reasoning @cfg) "high")]
+            (mapv (fn [r]
+                    {:label (str (if (= r active) "✓ " "  ") r)
+                     :value (case r
+                              "low" "quick, fewer tokens"
+                              "high" "provider default"
+                              "max" "deepest reasoning")
+                     :id r})
+                  ["low" "high" "max"])))
+        compact!
+        ;; /compact: ask the summarizer for a standing summary of the prefix, keep
+        ;; the last few exchanges verbatim, and replace the transcript. Runs on a
+        ;; worker thread so the TUI stays live; the :summarize seam makes it
+        ;; testable without a network.
+        (fn []
+          (let [msgs (:messages @state)
+                n (count msgs)]
+            (cond
+              (:busy? @state)
+              (flash! "a turn is running — compact when it finishes")
+
+              (< n 6)
+              (flash! "nothing to compact yet")
+
+              :else
+              (let [keep (vec (take-last 4 msgs))
+                    prefix (vec (drop-last 4 msgs))
+                    transcript
+                    (str/join
+                     "\n"
+                     (map (fn [e]
+                            (str (name (:role e)) ": "
+                                 (str/trim (str (or (:text e) (:content e) (:name e) "")))))
+                          prefix))
+                    summarize (or (:summarize opts)
+                                  #(summarize-transcript strong % usage))]
+                (swap! state assoc :busy? true)
+                (future
+                  (try
+                    (let [summary (summarize transcript)]
+                      (swap! state assoc
+                             :messages (into [{:role :system
+                                               :text (str "Context so far: " summary)}]
+                                             keep)
+                             :busy? false)
+                      (when (and stores @thread-ref)
+                        (try
+                          (session/persist! stores @thread-ref (:messages @state))
+                          (catch Exception _ nil)))
+                      (ui/on-gui
+                       (fn []
+                         (flash! (str "compacted " n " → " (inc (count keep)) " messages")))))
+                    (catch Exception e
+                      (swap! state assoc :busy? false)
+                      (ui/on-gui
+                       (fn []
+                         (flash! (str "compact failed: " (or (ex-message e) "?"))))))))))))
+        open-dialog!
+        ;; The sheet seam: a resolved :dialog command opens a modal sheet. Every
+        ;; :sheet-id command now has a real sheet: /help, /settings, /config,
+        ;; /history, /models, /think, /memory; /tree and /execs report their
+        ;; honest empty state (no fanout, no async execs in the chat loop).
+        (fn [kind & [extra]]
+          (swap! picker assoc :open? false)
+          (case kind
+            :help (reset! dialog
+                         {:kind :help
+                          :items (mapv (fn [c]
+                                         {:label (if (seq (:aliases c))
+                                                   (str (:name c) " (" (str/join ", " (:aliases c)) ")")
+                                                   (:name c))
+                                          :value (:description c)
+                                          :command c})
+                                       (cmd/commands))
+                          :selected 0 :filter "" :tab 0})
+            (:settings :config) (reset! dialog
+                                       {:kind kind
+                                        :items (settings/rows-for-map @settings-cfg)
+                                        :selected 0 :filter "" :tab 0})
+            :history (reset! dialog
+                             {:kind :history
+                              :items (vec
+                                      (map-indexed
+                                       (fn [i text]
+                                         (let [one (str/replace text "\n" " ")
+                                               label (if (> (count one) 46)
+                                                       (str (subs one 0 46) "…")
+                                                       one)]
+                                           {:label label
+                                            :value (str (inc i) " ago")
+                                            :text text}))
+                                       (reverse (user-texts))))
+                              :selected 0 :filter "" :tab 0})
+            :models (reset! dialog
+                            {:kind :models
+                             :items (model-rows)
+                             :selected 0 :filter "" :tab 0})
+            :effort (reset! dialog
+                            {:kind :effort
+                             :items (effort-rows)
+                             :selected 0 :filter "" :tab 0})
+            :memory (reset! dialog
+                            {:kind :memory
+                             :items (if (seq facts)
+                                      (mapv (fn [[k v]] {:label (name k) :value (str v)}) facts)
+                                      [{:label "no salient facts yet"
+                                        :value "facts appear when a session closes"}])
+                             :selected 0 :filter "" :tab 0})
+            :tree (reset! dialog
+                          {:kind :tree
+                           :items [{:label "single agent"
+                                    :value "the chat loop does not fan out yet"}]
+                           :selected 0 :filter "" :tab 0})
+            :execs (reset! dialog
+                           {:kind :execs
+                            :items [{:label "no running execs"
+                                     :value "tools run synchronously per turn"}]
+                            :selected 0 :filter "" :tab 0})
+            :board (reset! dialog
+                           {:kind :board
+                            :items (board-rows (or (:tasks extra) (board-tasks)))
+                            :selected 0 :filter "" :tab 0})
+            :tasks (reset! dialog
+                           {:kind :tasks
+                            :title (:title extra)
+                            :items (mapv task-row (:tasks extra))
+                            :selected 0 :filter "" :tab 0})
+            :task (reset! dialog
+                          {:kind :task
+                           :title (:title extra)
+                           :items (task-detail-rows (:task extra))
+                           :selected 0 :filter "" :tab 0})))
+        task-command!
+        ;; /task: parse the rest and run add/list/show/start/close/set-status
+        ;; against the harness taskboard. Mutations flash a one-line result;
+        ;; list/show open the read-only :tasks/:task sheets. Every branch is a
+        ;; thin call over the same h/ functions tools/dispatch exposes to the
+        ;; model, so the shell and the agent stay on one surface.
+        (fn [rest]
+          (let [{:keys [sub positional flags]} (parse-task-line rest)
+                pid (:id board)]
+            (if-not board-ready?
+              (flash! "taskboard not ready — run `faraday init` in the project first")
+              (case (or sub "list")
+                "add"
+                (let [title (or (:title flags)
+                                (when (seq positional) (str/join " " positional)))]
+                  (if (str/blank? title)
+                    (flash! "usage: /task add <title> [--priority high] [--scope rel/path]")
+                    (try
+                      (let [sid (when-let [rel (:scope flags)]
+                                  (some-> (h/scope-by-rel @harness pid rel) :id))
+                            t (h/task-add! @harness {:project-id pid
+                                                     :scope-id sid
+                                                     :title title
+                                                     :body (or (:body flags) "")
+                                                     :priority (or (:priority flags) "normal")
+                                                     :epic-id (:epic flags)
+                                                     :assignee (:assignee flags)
+                                                     :dedup-key (:dedup-key flags)})]
+                        (flash! (str "added " (:id t))))
+                      (catch Exception e
+                        (flash! (str "task add failed: " (or (ex-message e) "?")))))))
+
+                "list"
+                (let [status (:status flags)
+                      ts (h/task-list @harness pid :status status)]
+                  (if (seq ts)
+                    (open-dialog! :tasks {:title (or status "all tasks") :tasks ts})
+                    (flash! (str "no tasks" (when status (str " with status " status))))))
+
+                "show"
+                (let [id (or (first positional) (:id flags))
+                      t (and id (try (h/task @harness id) (catch Exception _ nil)))]
+                  (if t
+                    (open-dialog! :task {:title (str "task " (:id t)) :task t})
+                    (flash! (str "no task " (or id "?")))))
+
+                "start"
+                (let [id (first positional)]
+                  (if id
+                    (try (let [t (h/task-start @harness id)]
+                           (flash! (str (:id t) " → " (:status t))))
+                         (catch Exception e (flash! (str "start failed: " (or (ex-message e) "?")))))
+                    (flash! "usage: /task start <id>")))
+
+                "close"
+                (let [id (first positional)]
+                  (if id
+                    (try (let [t (h/task-set-status! @harness id "done")]
+                           (flash! (str (:id t) " → " (:status t))))
+                         (catch Exception e (flash! (str "close failed: " (or (ex-message e) "?")))))
+                    (flash! "usage: /task close <id>")))
+
+                "set-status"
+                (let [id (first positional)
+                      status (or (:status flags) (second positional))]
+                  (if (and id status)
+                    (try (let [t (h/task-set-status! @harness id status)]
+                           (flash! (str (:id t) " → " (:status t))))
+                         (catch Exception e (flash! (str "set-status failed: " (or (ex-message e) "?")))))
+                    (flash! "usage: /task set-status <id> <status>")))
+
+                ;; unknown verb — point at the supported surface
+                (flash! "usage: /task add|list|show|start|close|set-status …")))))
+        bg!
+        ;; Run thunk on a worker thread; on error, flash "<prefix>: <msg>".
+        (fn [prefix thunk]
+          (future
+            (try
+              (thunk)
+              (catch Exception e
+                (ui/on-gui (fn [] (flash! (str prefix ": " (or (ex-message e) "?")))))))))
+        loop-run-command!
+        ;; /run <task-id|manifest.edn>: run a board task through the honesty
+        ;; path, or run a loop manifest end to end, and flash a one-line result.
+        (fn [rest]
+          (let [rest (str/trim (str rest))]
+            (cond
+              (str/blank? rest)
+              (flash! "usage: /run <task-id|manifest.edn>")
+
+              (and board-ready?
+                   (try (some? (h/task @harness rest)) (catch Exception _ nil)))
+              (bg! "run failed"
+                   (fn []
+                     (let [r (run/run-task! proj-root rest)]
+                       (ui/on-gui
+                        (fn []
+                          (flash! (str "task " (name (or (:agent-status r) :done))
+                                   (if (:green? r) " ✓" " ✗"))))))))
+
+              :else
+              (let [f (java.io.File. rest)
+                    manifest (when (.isFile f)
+                               (try (edn/read-string (slurp f)) (catch Exception _ nil)))]
+                (if-not (map? manifest)
+                  (flash! (str "no task or manifest " rest))
+                  (bg! "run failed"
+                       (fn []
+                         (let [r (run/run-manifest! (or proj-root cwd) manifest :task (:task manifest))]
+                           (ui/on-gui
+                            (fn []
+                              (flash! (str "loop " (name (get-in r [:outcomes 0 :outcome :status] :done))))))))))))))
+        spawn-command!
+        ;; /spawn <manifest.edn> [N]: fan out N independent agents of one loop
+        ;; manifest over the scheduler, then flash how many reached :done.
+        (fn [rest]
+          (let [tokens (str/split (str/trim (str rest)) #"\s+")
+                path (first tokens)
+                n (try (Long/parseLong (str (second tokens))) (catch Exception _ 1))
+                f (when (seq path) (java.io.File. path))
+                manifest (when (and f (.isFile f))
+                           (try (edn/read-string (slurp f)) (catch Exception _ nil)))]
+            (cond
+              (not (map? manifest))
+              (flash! "usage: /spawn <manifest.edn> [N]")
+
+              (or (< n 1) (> n 64))
+              (flash! "N out of range (1..64)")
+
+              :else
+              (bg! "spawn failed"
+                   (fn []
+                     (let [r (run/run-manifest! (or proj-root cwd) manifest :task (:task manifest) :n n)
+                           done (count (filter #(= :done (get-in % [:outcome :status])) (:outcomes r)))]
+                       (ui/on-gui (fn [] (flash! (str "spawned " done "/" n " done"))))))))))
+        run-command!
+        ;; The shell's action seam: a resolved command id becomes behaviour here,
+        ;; exactly as nodecode maps a command name to an action. clear/quit are
+        ;; wired first; :dialog commands open a sheet via open-dialog!.
+        (fn [resolved]
+          (let [c (:command resolved)]
+            (if (some? (:sheet-id c))
+              (open-dialog! (:sheet-id c))
+              (case (:action-id c)
+                :clear (do (swap! state assoc :messages [] :error nil)
+                           (when (and stores @thread-ref)
+                             (try (session/persist! stores @thread-ref [])
+                                  (catch Exception _ nil)))
+                           (flash! "session cleared"))
+                :quit (tui/quit!)
+                :status (flash! (str (count (:messages @state)) " messages · "
+                                     (if (:busy? @state) "working" "idle")
+                                     " · model " (or (:model @cfg) "faraday")))
+                :init (let [p (settings/scaffold! settings-path)]
+                        (flash! (str "settings at " p)))
+                :privacy (flash! "prompts go to the configured model provider; tools run locally")
+                :cost (let [u @usage
+                            p (long (or (:prompt_tokens u) 0))
+                            c (long (or (:completion_tokens u) 0))
+                            n (long (or (:requests u) 0))]
+                        (flash! (str "↑" p " ↓" c " · " n " calls")))
+                :compact (compact!)
+                :export (let [target (try
+                                       (export-session! (:messages @state) @thread-ref
+                                                        (str/trim (str (:rest resolved)))
+                                                        {:cwd cwd})
+                                       (catch Exception e
+                                         (flash! (str "export failed: " (or (ex-message e) "?")))
+                                         nil))]
+                          (when target
+                            (flash! (str "saved " target))))
+                :task (task-command! (:rest resolved))
+                :undo (if-let [h (history-undo @state)]
+                        (do (swap! state assoc :messages (:messages h) :redo (:redo h))
+                            (persist-transcript!)
+                            (flash! (str "rewound " (count (peek (:redo h))) " entries")))
+                        (flash! "nothing to undo"))
+                :redo (if-let [h (history-redo @state)]
+                        (let [n (count (peek (:redo @state)))]
+                          (swap! state assoc :messages (:messages h) :redo (:redo h))
+                          (persist-transcript!)
+                          (flash! (str "returned " n " entries")))
+                        (flash! "nothing to redo"))
+                :fork (if (:busy? @state)
+                        (flash! "a turn is running — fork after it")
+                        (let [new-id (session/default-thread-id)]
+                          (when (and stores @thread-ref)
+                            (try (session/persist! stores @thread-ref (:messages @state))
+                                 (catch Exception _ nil)))
+                          (reset! thread-ref new-id)
+                          (when (and stores new-id)
+                            (try (session/persist! stores new-id (:messages @state))
+                                 (catch Exception _ nil)))
+                          (flash! (str "forked " new-id))))
+                :run (loop-run-command! (:rest resolved))
+                :spawn (spawn-command! (:rest resolved))
+                (flash! (str (:name c) " — not wired yet"))))))
+        close-dialog!
+        (fn [] (reset! dialog nil))
+        selected-dialog-item!
+        ;; The item under the dialog's cursor, in the filtered list the view
+        ;; renders, so :activate and :toggle act on exactly what is on screen.
+        (fn []
+          (let [items (dialog/filter-items (:items @dialog) (:filter @dialog))]
+            (nth items (:selected @dialog) nil)))
+        toggle-settings-row!
+        ;; Space on a /settings toggle row flips it by :path (the filtered index
+        ;; does not match the source map, so index-based toggle would hit the
+        ;; wrong row), then persists — the same path edit enter performs.
+        (fn []
+          (when-let [it (selected-dialog-item!)]
+            (when (= :toggle (:kind it))
+              (apply-settings! (settings/toggle-at-path @settings-cfg (:path it))
+                               (:path it)))))
+        dialog-activate!
+        ;; Enter on a row runs it. /help rows carry the full command, so
+        ;; activating one re-runs the command exactly as if it had been typed.
+        ;; /settings toggles booleans in place and opens the value editor for
+        ;; strings/numbers; /config, /memory, /tree and /execs are read-only.
+        ;; /history picks the row's text into the composer; /models and /think
+        ;; (effort) select a provider or reasoning rung and persist it.
+        (fn []
+          (when-let [it (selected-dialog-item!)]
+            (case (:kind @dialog)
+              :settings
+              (cond
+                (= :toggle (:kind it))
+                (toggle-settings-row!)
+
+                (= :value (:kind it))
+                (swap! dialog assoc :editor
+                       {:path (:path it) :label (:label it) :desc (:desc it)
+                        :type (:type it)
+                        :value (if (:masked? it)
+                                 ""
+                                 (str (get-in @settings-cfg (:path it))))})
+
+                :else nil)
+
+              :history
+              (do (close-dialog!)
+                  (reset! draft (:text it))
+                  (reset! hist-idx nil))
+
+              :models
+              (do (save-settings! (assoc-in @settings-cfg [:chat :provider] (:id it))
+                                  [:chat :provider])
+                  (swap! dialog assoc :items (model-rows))
+                  (flash! (str "chat provider → " (name (:id it)))))
+
+              :effort
+              (do (save-settings! (assoc-in @settings-cfg [:chat :reasoning] (:id it))
+                                  [:chat :reasoning])
+                  (swap! dialog assoc :items (effort-rows))
+                  (flash! (str "reasoning → " (:id it))))
+
+              (:config :memory :tree :execs) nil
+              ;; default: help and any sheet whose rows carry a :command
+              (do (close-dialog!)
+                  (when-let [c (:command it)]
+                    (run-command! {:command c}))))))
+        dialog-key!
+        ;; The dialog's :on-key, bubbled from its :focus-sink. Mapped keys move
+        ;; the cursor / toggle / fold / filter; enter activates; everything else
+        ;; declines (esc then falls through to the overlay's :on-close).
+        (fn [ev]
+          (when @dialog
+            (if (:editor @dialog)
+              ;; value editor: the entry owns typing; enter commits (entry
+              ;; :on-activate), esc cancels (editor overlay :on-close). Decline
+              ;; everything else so it falls through to the overlay.
+              false
+              (if-let [action (dialog/key-action ev (seq (:tabs @dialog)))]
+                (do (cond
+                      (= [:toggle] action)
+                      (if (= :settings (:kind @dialog))
+                        (toggle-settings-row!)
+                        (swap! dialog #(dialog/apply-action % action)))
+
+                      (= :activate (first action))
+                      (dialog-activate!)
+
+                      :else
+                      (swap! dialog #(dialog/apply-action % action)))
+                    true)
+                false))))
+        clear-draft!
+        ;; A typed-alone command consumes itself: the composer empties, recall
+        ;; resets, and the picker closes, so the next keystroke starts a fresh
+        ;; line — the same lifecycle nodecode gives an executed command.
+        (fn []
+          (reset! draft "")
+          (reset! hist-idx nil)
+          (swap! picker assoc :open? false))
+        complete!
+        (fn []
+          (let [matches (cmd/match-commands (cmd/filter-text (str @draft)))
+                sel (min (:selected @picker) (max 0 (dec (count matches))))]
+            (when (and (seq matches) (>= sel 0))
+              (let [c (nth matches sel)]
+                (reset! draft (str (:matched c) " "))
+                (reset! hist-idx nil)
+                (swap! picker assoc :open? false)))))
         send!
         (fn []
           (let [text (str/trim (str @draft))]
@@ -1087,53 +2053,114 @@
               :else
               (do (reset! draft "")
                   (reset! pending? false)
+                  (reset! follow? true)
                   (reset! hist-idx nil)
                   (scroll-to-bottom!)
                   ((:send! sess) text)))))]
     (fn []
       (let [{:keys [messages busy? error]} @state]
-        [:vbox {:spacing 0 :margin [0 1 0 1]
+        [:vbox {:spacing 0 :padding [0 1 0 1]
+                :bg (themes/color :canvas)
                 :on-key (fn [ev]
                           (cond
-                            (k/match? ev "ctrl+y") (do (copy-last-answer!) true)
+                            (and (:open? @picker) (k/match? ev "up"))
+                            (do (swap! picker #(cmd/picker-step (str @draft) % :up)) true)
+
+                            (and (:open? @picker) (k/match? ev "down"))
+                            (do (swap! picker #(cmd/picker-step (str @draft) % :down)) true)
+
+                            (and (:open? @picker) (k/match? ev "tab"))
+                            (do (complete!) true)
+
+                            (and (:open? @picker) (= :escape (:type ev)))
+                            (do (swap! picker assoc :open? false) true)
+
+                            (k/match? ev "enter")
+                            (let [draft-text (str/trim (str @draft))]
+                              (if (:open? @picker)
+                                (do (let [matches (cmd/match-commands (cmd/filter-text draft-text))
+                                          sel (min (:selected @picker) (max 0 (dec (count matches))))]
+                                      (when (and (seq matches) (>= sel 0))
+                                        (when-let [resolved (cmd/resolve-command (:matched (nth matches sel)))]
+                                          (run-command! resolved))))
+                                    (clear-draft!)
+                                    true)
+                                (if-let [resolved (cmd/resolve-command draft-text)]
+                                  (do (run-command! resolved) (clear-draft!) true)
+                                  false)))
+
+                            (k/match? ev "ctrl+x") (do (copy-last-answer!) true)
                             (k/match? ev "ctrl+p") (do (recall! :prev) true)
                             (k/match? ev "ctrl+n") (do (recall! :next) true)
                             (or (k/match? ev "up") (k/match? ev "down")
-                                (k/match? ev "pgup") (k/match? ev "pgdn"))
-                            (do (transcript-scroll! ev) true)))}
+                                (k/match? ev "pgup") (k/match? ev "pgdn")
+                                (k/match? ev "home") (k/match? ev "end"))
+                            (do (transcript-scroll! ev follow?) true)))}
          [:scroll {:orientation :vertical :vexpand true}
           (transcript-view-cached messages expanded wrap)]
          [:hbox {:spacing 2 :margin [1 0 0 0]}
           (if busy?
-            [:spinner {:tick @tick :label "working" :color (:tool pal)}]
-            [:label {:label "● ready" :color (:assistant pal) :bold true}])
-          [:label {:label (str "model " model) :color (:muted pal) :dim true}]
+            [:spinner {:tick @tick :label "working" :color (themes/color :tool)}]
+            [:label {:label "● ready" :color (themes/color :assistant) :bold true}])
+          [:label {:label (str "model " (or (:model @cfg) "faraday")) :color (themes/color :muted) :dim true}]
           (let [recall-hint (when (some? @hist-idx)
                               (str "recall " (inc @hist-idx) "/" (count (user-texts))
                                    " · ctrl+n newer · ctrl+p older"))
                 pending-hint (when @pending?
-                               "staged — edit or clear to cancel")]
-            [:label {:label (or @copied recall-hint pending-hint
-                                "ctrl+c quit · ctrl+y copy · ctrl+p/n recall · ↑/↓ pgup/pgdn scroll")
-                     :color (if (or @copied recall-hint pending-hint) (:assistant pal) (:muted pal))
-                     :dim (not (or @copied recall-hint pending-hint))
+                               "staged — edit or clear to cancel")
+                follow-hint (when-not @follow?
+                              "scrolled up — Home top · End/pgdn re-follow")]
+            [:label {:label (or @toast @copied recall-hint pending-hint follow-hint
+                                "ctrl+c quit · / command · ctrl+x copy · ctrl+p/n recall · ↑/↓ scroll")
+                     :color (if (or @toast @copied recall-hint pending-hint follow-hint) (themes/color :assistant) (themes/color :muted))
+                     :dim (not (or @toast @copied recall-hint pending-hint follow-hint))
                      :halign :end :hexpand true}])]
          (when error
-           [:label {:label (str "⚠ " error) :color (:danger pal)}])
-         [:hbox {:bg (:composer pal) :hexpand true :spacing 1
+           [:label {:label (str "⚠ " error) :color (themes/color :danger)}])
+         (when (:open? @picker)
+           (command-dropdown (cmd/match-commands (cmd/filter-text (str @draft)))
+                             (:selected @picker)))
+         (when @dialog
+           (if-let [ed (:editor @dialog)]
+             (dialog/editor-view
+              {:label (or (:desc ed) (:label ed))
+               :value (:value ed)
+               :on-change (fn [t] (swap! dialog assoc-in [:editor :value] t))
+               :on-activate commit-edit!
+               :on-close cancel-edit!})
+             (dialog/dialog-view
+              {:title (or (:title @dialog) (name (:kind @dialog)))
+               :items (:items @dialog)
+               :selected (:selected @dialog)
+               :filter (:filter @dialog)
+               :filter? true
+               :footer (case (:kind @dialog)
+                         :settings "↑↓ move · type filter · enter toggle/edit · esc close"
+                         :config "read-only · ↑↓ move · type filter · esc close"
+                         "↑↓ move · type filter · enter run · esc close")
+               :max-rows 12 :width 64
+               :on-close close-dialog!
+               :on-key dialog-key!})))
+         [:hbox {:bg (themes/color :composer) :hexpand true :spacing 1
                  :margin [1 0 1 0] :padding [0 1]}
-          [:label {:label "›" :color (:accent pal) :bold true}]
+          [:label {:label "›" :color (themes/color :accent) :bold true}]
           ;; The entry is always focused (:autofocus) and a focused glimmer-tui
           ;; entry paints reverse video, so pre-invert its colours: reverse then
           ;; resolves back to light-on-composer instead of a white input bar.
           [:entry {:text @draft
-                   :placeholder (if busy? "faraday is working…" "ask faraday")
+                   :placeholder (if busy? "Type to steer" "Ready")
                    :hexpand true :autofocus true
-                   :color (:composer pal) :bg (:foreground pal)
-                   :on-change #(reset! draft %)
+                   :color (themes/color :composer) :bg (themes/color :body)
+                   :on-change (fn [t]
+                                (reset! draft t)
+                                (if (cmd/completing? t)
+                                  (swap! picker #(cmd/picker-step t % :open))
+                                  (swap! picker assoc :open? false)))
+                   :keys (when-not @follow?
+                           {:cursor-start ["ctrl+a"] :cursor-end ["ctrl+e"]})
                    :on-activate send!}]
           [:label {:label (if busy? "●" "○")
-                   :color (if busy? (:tool pal) (:muted pal))
+                   :color (if busy? (themes/color :tool) (themes/color :muted))
                    :bold true}]]]))))
 
 (defn- chat-flags
@@ -1253,6 +2280,7 @@
                  (shell-exec name args)
                  (tools/dispatch @hd proj-root @pool-ref name args)))
         opts (cond-> {:exec exec :session @stores :thread-id thread-id
+                      :cwd root :proj-root proj-root :harness hd :board board
                       :boot-context boot-context}
                sandbox-ctx (assoc :sandbox-context sandbox-ctx)
                (:model flags) (assoc :model (:model flags))
