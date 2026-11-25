@@ -2328,7 +2328,7 @@
                                          :egress (:egress sandbox-cfg)}))
         _ (when sandbox
             (binding [*out* *err*] (println "warming sandbox VM (first boot)…"))
-            (when-let [err (:warm! sandbox)]
+            (when-let [err ((:warm! sandbox))]
               (binding [*out* *err*]
                 (println "⚠ faraday: could not warm the sandbox VM — " err)
                 (println "   retry, or run with --exec shell to use host exec."))
