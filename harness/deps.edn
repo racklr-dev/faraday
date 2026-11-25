@@ -37,7 +37,7 @@
 
         racklr-dev/jolt-sandbox
         {:git/url "https://github.com/racklr-dev/jolt-sandbox"
-         :git/sha "faed9dea7f2ca097e742495d0c6ecea30ae21bec"}
+         :git/sha "b77d45f46d8a8f033d56a68157f85b5b0a155c2a"}
 
         racklr-dev/faraday-console
         {:local/root "../console"}}}
