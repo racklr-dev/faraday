@@ -975,6 +975,27 @@
   [thread-id]
   (if (instance? clojure.lang.IDeref thread-id) @thread-id thread-id))
 
+(def ^:private task-id-re #"faraday-[0-9a-f]{12}")
+
+(defn- task-id-in
+  "The faraday board-task id mentioned in `text`, or nil."
+  [text]
+  (re-find task-id-re (str text)))
+
+(defn- task-done-goal
+  "A :goal-fn for run-turn!: met when the transcript shows the board task was
+  moved to done. Stops the loop at the real completion signal instead of
+  waiting for the model to remember to answer."
+  [task-id]
+  (fn [{:keys [entries]}]
+    (boolean
+     (some (fn [e]
+             (and (= :tool-call (:role e))
+                  (= "task_set_status" (:name e))
+                  (= task-id (:id (:args e)))
+                  (= "done" (:status (:args e)))))
+           entries))))
+
 (defn chat-session
   "A headless chat: owns the transcript and drives the tool loop. Returns
   {:state (ratom {:messages :busy? :error}) :send! (fn text)
@@ -991,14 +1012,18 @@
         send! (fn [text]
                 (let [text (str/trim (str text))]
                   (when (and (seq text) (not (:busy? @state)))
-                    (let [es (conj (:messages @state) {:role :user :text text})]
+                    (let [es (conj (:messages @state) {:role :user :text text})
+                          task-id (last (keep task-id-in
+                                              (map :text
+                                                   (filter #(= :user (:role %)) es))))]
                       (reset! interrupt false)
                       (swap! state assoc :busy? true :error nil :messages es :redo [])
                       (future
                         (binding [*interrupt* interrupt]
                           (run-turn! {:call call :exec exec :system system
                                       :max-turns max-turns :max-stall max-stall
-                                      :interrupt interrupt}
+                                      :interrupt interrupt
+                                      :goal-fn (when task-id (task-done-goal task-id))}
                                      state es))
                         (when (and stores thread-id)
                           (try (session/persist! stores (deref-thread thread-id) (:messages @state))
