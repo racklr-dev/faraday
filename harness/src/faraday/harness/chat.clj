@@ -605,7 +605,8 @@
                            (do (recycle-pool!)
                                {:status :error
                                 :error "sandbox VM unreachable (recycled); retry"
-                                :fatal? false})
+                                :fatal? false
+                                :retryable? true})
                            {:status (if (zero? (:exit r)) :ok :error)
                             :exit (:exit r)
                             :stdout (:stdout r)
@@ -713,19 +714,26 @@
         interrupt (or *interrupt* (:interrupt opts) (atom false))
         max-stall (or max-stall 3)
         run-one (fn [name args]
-                  (let [res (exec name args)
-                        progress? (if (contains? res :progress?)
-                                    (:progress? res)
-                                    (= :ok (:status res)))]
-                    [{:role :tool-call :name name :args args}
-                     {:role :tool-result :name name
-                      :status (:status res)
-                      :exit (:exit res)
-                      :text (truncate-tool-out (or (:stdout res) (:stderr res) ""))
-                      :error (:error res)
-                      :fatal? (true? (:fatal? res))
-                      :interrupted? (true? (:interrupted? res))
-                      :progress? progress?}]))
+                  (let [attempt (fn [res]
+                                  [{:role :tool-call :name name :args args}
+                                   {:role :tool-result :name name
+                                    :status (:status res)
+                                    :exit (:exit res)
+                                    :text (truncate-tool-out (or (:stdout res) (:stderr res) ""))
+                                    :error (:error res)
+                                    :fatal? (true? (:fatal? res))
+                                    :interrupted? (true? (:interrupted? res))
+                                    :progress? (if (contains? res :progress?)
+                                                 (:progress? res)
+                                                 (= :ok (:status res)))}])
+                        res1 (exec name args)]
+                    (if (and (true? (:retryable? res1))
+                             (not (:interrupted? res1)))
+                      ;; the sandbox recycled itself; replay once on the fresh
+                      ;; VM and record both attempts so the trace shows the
+                      ;; recycle + retry instead of a bare error
+                      (vec (concat (attempt res1) (attempt (exec name args))))
+                      (attempt res1))))
         budget-note (fn [left]
                        (cond
                          (<= left 2)
