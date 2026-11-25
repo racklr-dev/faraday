@@ -159,7 +159,7 @@
   [name code workspace]
   (let [{:keys [prefix ext]} (get language-runners name)
         dir (str workspace "/.faraday/scratch")
-        path (str dir "/" name "." ext)]
+        path (str dir "/" name "-" (subs (str (java.util.UUID/randomUUID)) 0 8) "." ext)]
     (.mkdirs (java.io.File. dir))
     (spit path (str code))
     {:argv (into (vec prefix) [path]) :path path}))

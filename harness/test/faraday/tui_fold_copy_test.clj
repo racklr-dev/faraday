@@ -61,14 +61,17 @@
   (tui/frame!)
   (let [text (apply str (scr/lines screen))]
     (check "tool result folds to a one-line summary"
-           true (str/includes? text "tool run_shell · ok · exit 0 · 3 lines"))
+           true (str/includes? text "run_shell echo hi · ok · exit 0 · 3 lines"))
     (check "folded tool body is hidden" false (str/includes? text "line one")))
-  (let [btn (find-button #(str/includes? % "tool run_shell") root)]
+  (let [btn (find-button #(str/includes? % "run_shell") root)]
     (check-true "fold header button exists" (some? btn))
     ((get-in @btn [:props :on-click]))
     (tui/frame!)
     (let [text (apply str (scr/lines screen))]
-      (check "clicking the header expands the body" true (str/includes? text "line one")))))
+      (check "clicking the header expands the body" true (str/includes? text "line one"))
+      (check "expanded tool step shows argv without a shell prompt"
+             true (and (str/includes? text "run_shell echo hi")
+                       (not (str/includes? text "$ run_shell")))))))
 
 ;; -- long code blocks fold -----------------------------------------------------
 (let [code-lines (str/join "\n" (repeat 13 "(defn x [] 1)"))
@@ -85,7 +88,11 @@
   (let [h ((var chat/entry-hiccup) (atom #{}) 60 false 0 {:role :assistant :text (str "```\n" code-lines "\n```")})
         s (pr-str h)]
     (check "entry-hiccup folds a long code block" true (str/includes? s "code · 13 lines"))
-    (check "folded code body is hidden" false (str/includes? s "(defn x [] 1)"))))
+    (check "folded code body is hidden" false (str/includes? s "(defn x [] 1)")))
+  (let [h2 ((var chat/entry-hiccup) (atom #{}) 60 true 0 {:role :assistant :text (str "```\n" code-lines "\n```")})
+        s2 (pr-str h2)]
+    (check "latest answer renders a long code block open" false (str/includes? s2 "code · 13 lines"))
+    (check "latest answer shows the code body" true (str/includes? s2 "(defn x [] 1)"))))
 
 ;; -- keyboard: Tab focuses the fold header, Enter opens it ---------------------
 (let [calls (atom 0)

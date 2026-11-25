@@ -80,3 +80,5 @@
   (check "unfixable task manifest unchanged" {:bogus 1} (get-in (h/task hd (:id task)) [:manifest :agent :script 0])))
 
 (println "ALL SUPERVISOR TESTS PASSED")
+
+(shutdown-agents)

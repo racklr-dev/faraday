@@ -48,6 +48,12 @@
   [root]
   (str root "/.faraday/settings.json"))
 
+(defn project-root
+  "The project root from opts: :project-root (config/CLI seam) or :proj-root
+  (chat/TUI seam)."
+  [opts]
+  (or (:project-root opts) (:proj-root opts)))
+
 (defn- json-key
   "Read a JSON key string as a keyword, normalizing underscores to hyphens so
   settings.json can use dirge/OpenAI spellings (base_url, api_key,
@@ -109,12 +115,13 @@
 
 (defn load-config
   "Read and merge the raw config: builtin defaults < user settings < project
-  settings. opts may carry :settings-file, :project-root, :auth-file to
-  override the locations (tests use these to stay hermetic)."
+  settings. opts may carry :settings-file, :project-root (or :proj-root),
+  :project-settings-file and :auth-file to override the locations (tests use
+  these to stay hermetic)."
   [opts]
   (let [user (read-json-map (or (:settings-file opts) (settings-file)))
         proj (read-json-map (or (:project-settings-file opts)
-                                (when-let [root (:project-root opts)]
+                                (when-let [root (project-root opts)]
                                   (project-settings-file root))))
         extra (select-keys opts [:providers :roles :agents :escalation
                                  :proposer :chat])]
@@ -365,6 +372,7 @@
                 (:model llm)
                 (:model p))
      :system (or (:system entry))
+     :reasoning (or (:reasoning entry))
      :context (normalize-context (or (:context opts) (:context entry) (:context config)))
      :wrap (or (:wrap opts) (:wrap entry))}))
 

@@ -62,6 +62,48 @@
        {:done "ok"}
        (chat/parse-action "```clojure\n{:done \"ok\"}\n```"))
 
+;; -- undo/redo (branch rewind) ------------------------------------------------
+(check "last-user-index: nil with no user turn"
+       nil
+       (chat/last-user-index [{:role :assistant :text "ok"}]))
+(check "last-user-index: last user entry"
+       2
+       (chat/last-user-index [{:role :user :text "a"}
+                              {:role :assistant :text "b"}
+                              {:role :user :text "c"}]))
+(check "undo-turn: splits the last user turn"
+       [[{:role :user :text "a"} {:role :assistant :text "b"}]
+        [{:role :user :text "c"} {:role :assistant :text "d"} {:role :tool-call :name "x"}]]
+       (chat/undo-turn [{:role :user :text "a"} {:role :assistant :text "b"}
+                        {:role :user :text "c"} {:role :assistant :text "d"}
+                        {:role :tool-call :name "x"}]))
+(check "undo-turn: nil with no user turn"
+       nil
+       (chat/undo-turn [{:role :assistant :text "ok"}]))
+(check "history-undo moves the last turn onto :redo"
+       {:messages [{:role :user :text "a"} {:role :assistant :text "b"}]
+        :redo [[{:role :user :text "c"} {:role :assistant :text "d"}]]}
+       (chat/history-undo {:messages [{:role :user :text "a"} {:role :assistant :text "b"}
+                                      {:role :user :text "c"} {:role :assistant :text "d"}]}))
+(check "history-undo nil with nothing to rewind"
+       nil
+       (chat/history-undo {:messages [{:role :assistant :text "ok"}]}))
+(check "history-redo returns the last rewound branch"
+       {:messages [{:role :user :text "a"} {:role :user :text "c"} {:role :assistant :text "d"}]
+        :redo []}
+       (chat/history-redo {:messages [{:role :user :text "a"}]
+                           :redo [[{:role :user :text "c"} {:role :assistant :text "d"}]]}))
+(check "history-redo nil with nothing rewound"
+       nil
+       (chat/history-redo {:messages [{:role :user :text "a"}]}))
+(check "undo then redo round-trips"
+       {:messages [{:role :user :text "a"} {:role :assistant :text "b"}]
+        :redo []}
+       (-> {:messages [{:role :user :text "a"} {:role :assistant :text "b"}]
+            :redo []}
+           chat/history-undo
+           chat/history-redo))
+
 ;; -- transcript->markdown -----------------------------------------------------
 (check "transcript->markdown: user+assistant"
        "# faraday session\n\n## user\n\nhi\n\n## assistant\n\nok"
@@ -96,6 +138,36 @@
          "/tmp/faraday-t1.md"
          @written))
 
+;; -- taskboard pure pieces -------------------------------------------------------
+(check "parse-task-line: add with flags"
+       {:sub "add" :positional ["fix" "the" "bug"] :flags {:priority "high" :scope "src/db"}}
+       (chat/parse-task-line "add fix the bug --priority high --scope src/db"))
+(check "parse-task-line: --k=v form"
+       {:sub "list" :positional [] :flags {:status "open"}}
+       (chat/parse-task-line "list --status=open"))
+(check "parse-task-line: blank defaults sub to nil"
+       {:sub nil :positional [] :flags {}}
+       (chat/parse-task-line "  "))
+(check "parse-task-line: no flags"
+       {:sub "show" :positional ["faraday-1"] :flags {}}
+       (chat/parse-task-line "show faraday-1"))
+
+(check "task-row carries id/priority/status"
+       {:label "fix the thing" :value "faraday-1  [high]  open" :task-id "faraday-1"}
+       (chat/task-row {:id "faraday-1" :title "fix the thing" :priority "high" :status "open"}))
+
+(check "board-rows orders by canonical column then priority"
+       ["faraday-2" "faraday-1" "faraday-3"]
+       (mapv :task-id
+             (chat/board-rows [{:id "faraday-3" :title "done" :priority "high" :status "done"}
+                               {:id "faraday-1" :title "open" :priority "low" :status "open"}
+                               {:id "faraday-2" :title "open" :priority "high" :status "open"}])))
+
+(check "task-detail-rows shows the key fields and clips body"
+       ["id" "title" "status" "priority" "body"]
+       (mapv :label (chat/task-detail-rows {:id "faraday-1" :title "t" :status "open"
+                                            :priority "normal" :body "a long body"})))
+
 ;; -- markdown highlighter --------------------------------------------------------
 (let [md #'chat/markdown-lines]
   (check "md: heading" [:heading "Title"] (first (md "# Title")))
@@ -104,10 +176,22 @@
   (check "md: inline code stripped" [:text "run bb"] (first (md "run `bb`")))
   (check "md: link collapses to label" [:text "docs"] (first (md "[docs](https://x)")))
   (check "md: plus bullet" [:bullet "item"] (first (md "+ item")))
+  (check "md: numbered item" [:numbered "1. item"] (first (md "1. item")))
   (check "md: italic stripped" [:text "italic"] (first (md "*italic*")))
   (check "md: underscore italic stripped" [:text "under"] (first (md "_under_")))
   (check "md: snake_case intact" [:text "snake_case_here"] (first (md "snake_case_here")))
   (check "md: bold in heading" [:heading "bold"] (first (md "## **bold**"))))
+
+(let [segs (chat/entry-segments {:role :assistant :text "para one\n\n- item a\n- item b\n\npara two"} 40)]
+  (check "entry-segments: tight list, single blank rows"
+         [{:t :line :kind :text} {:t :spacer} {:t :line :kind :bullet}
+          {:t :line :kind :bullet} {:t :spacer} {:t :line :kind :text}]
+         (mapv #(select-keys % [:t :kind]) segs)))
+
+(let [ww #'chat/wrap-width]
+  (check "wrap-width: explicit --wrap wins" 60 (ww {:wrap 60} 200))
+  (check "wrap-width: live cols minus scrollbar+inset" 178 (ww {} 180))
+  (check "wrap-width: headless fallback" 92 (ww {} nil)))
 
 (let [msgs (chat/build-messages "S" (vec (repeat 45 {:role :user :text "hi"})) :context-budget 40)]
   (check "folding prepends a summary" true (str/includes? (:content (second msgs)) "earlier context"))
@@ -217,9 +301,13 @@
     (check "long transcript overflows the viewport" true
            (> (:h (:content n 0)) (:h (:viewport n 0)))))
   (let [before (apply str (scr/lines screen))]
-    (tui/press! 338) (tui/drain!) (tui/frame!)   ; pgdn scrolls down
-    (check "pgdn scrolls the transcript" true
-           (not= before (apply str (scr/lines screen))))))
+    (tui/press! {:type :up}) (tui/drain!) (tui/frame!)   ; up detaches follow, scrolls up
+    (check "up arrow scrolls the transcript" true
+           (not= before (apply str (scr/lines screen)))))
+  (let [scrolled-up (apply str (scr/lines screen))]
+    (tui/press! {:type :page-down}) (tui/drain!) (tui/frame!) ; pgdn jumps back to bottom
+    (check "pgdn jumps back to the bottom" true
+           (not= scrolled-up (apply str (scr/lines screen))))))
 
 ;; -- composer kill/yank: ctrl+a/e/k + ctrl+y (readline loop) ----------------
 (let [fake-call (fn [_] "{:done \"ok\"}")

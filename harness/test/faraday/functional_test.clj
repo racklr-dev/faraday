@@ -123,3 +123,4 @@
              (boolean (or (:tool-call action) (:tool-calls action)))))
 
     (println "ALL FUNCTIONAL TESTS PASSED")))
+(shutdown-agents)

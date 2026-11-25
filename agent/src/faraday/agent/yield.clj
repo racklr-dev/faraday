@@ -39,7 +39,7 @@
   manifest and its derived fns, which the scheduler re-attaches on resume."
   [l]
   (select-keys l [:thread-id :task :turns :transcript :pending-call-id
-                  :pending-name :snapshot-ref :max-turns :timeout-ms]))
+                  :pending-name :snapshot-ref :max-turns :timeout-ms :children]))
 
 (defn checkpoint!
   "Durably checkpoint the loop's resumable state under its thread-id (the
@@ -136,6 +136,35 @@
               (checkpoint! mem l2)
               l2))
 
+          (contains? action :spawn)
+          (let [children (:children (:spawn action))]
+            (if (and (vector? children) (seq children)
+                     (every? #(and (map? %) (string? (:task %)) (seq (:task %))) children))
+              (if (>= (:turns l) (:max-turns l))
+                (-> (assoc l :status :max-turns
+                             :outcome {:status :max-turns :transcript (:transcript l)
+                                       :turns (:turns l)})
+                    (hibernate-sandbox! deps))
+                (let [spawn-fn (:spawn! deps)]
+                  (if-not (ifn? spawn-fn)
+                    (-> (assoc l :status :error
+                                 :outcome {:status :error
+                                           :error ":spawn action requires deps :spawn! (the scheduler seam)"
+                                           :transcript (:transcript l) :turns (:turns l)})
+                        (hibernate-sandbox! deps))
+                    (let [entry {:role :spawn :children (mapv #(select-keys % [:task]) children)}
+                          child-tids (spawn-fn l children)
+                          l2 (assoc l :transcript (conj (:transcript l) entry)
+                                      :turns (inc (:turns l))
+                                      :children (vec child-tids)
+                                      :status :awaiting-children)]
+                      (checkpoint! mem l2)
+                      l2))))
+              (-> (assoc l :status :error
+                           :outcome {:status :error :error ":spawn requires a non-empty :children vector of {:task ..} maps"
+                                     :transcript (:transcript l) :turns (:turns l)})
+                  (hibernate-sandbox! deps))))
+
           (contains? action :step-error)
           (-> (assoc l :status :error
                        :outcome {:status :error
@@ -170,3 +199,14 @@
           l2 (assoc l :transcript (conj (:transcript l) entry)
                       :pending-call-id nil :pending-name nil)]
       (step! deps l2))))
+
+(defn resume-children!
+  "Resume a parent parked at :awaiting-children: fold its children's terminal
+  outcomes into the transcript and step again, so the parent agent reads its
+  subagent results and continues (or finishes)."
+  [deps l children-outcomes]
+  (let [entry {:role :subagent-results :children children-outcomes}
+        l2 (assoc l :transcript (conj (:transcript l) entry)
+                    :children []
+                    :pending-call-id nil :pending-name nil)]
+    (step! deps l2)))

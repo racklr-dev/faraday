@@ -32,7 +32,7 @@
   (:kind :string :required true :enum #{"script" "model"}
    :doc "how to realize the agent from data; :script -> scripted-agent, :model -> faraday.agent.mw/compile-step-fn + deps :model-agent")
   (:script :array :required false :of :any
-   :doc "ordered actions: {:tool-call ..} or {:done ..} (required for :script)")
+   :doc "ordered actions: {:tool-call ..} | {:spawn {:children [{:task ..}]}} | {:done ..} (required for :script)")
   (:model :object :required false
    :doc "model agent opts realized by faraday.agent.mw/wrap-router (required for :model)"))
 

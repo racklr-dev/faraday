@@ -63,6 +63,10 @@
   (check-true "run-code-argv file exists" (.isFile (java.io.File. path)))
   (check-true "run-code-argv file holds the code" (str/includes? (slurp path) "(println 1)")))
 
+(let [a (:path (tools/run-code-argv "run_jolt" "(println 1)" root))
+      b (:path (tools/run-code-argv "run_jolt" "(println 2)" root))]
+  (check "run-code-argv names each call uniquely" false (= a b)))
+
 (let [lp (tools/language-prompt)]
   (check-true "language prompt names run_jolt" (str/includes? lp "run_jolt"))
   (check-true "language prompt says where it runs" (str/includes? lp "project root"))

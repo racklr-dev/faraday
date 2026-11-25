@@ -69,5 +69,5 @@
 
   "proposer": { "provider": "deepseek", "model": "deepseek-flash" },
   "context":  "operator standing context, injected into every chat request",
-  "chat":     { "provider": "deepseek", "model": "deepseek-flash", "wrap": 92, "context": "you are faraday, be terse" }
+  "chat":     { "provider": "deepseek", "model": "deepseek-flash", "context": "you are faraday, be terse" }
 }

@@ -106,3 +106,5 @@
   (check "model task manifest persisted" 7 (:max-turns (:manifest (h/task hd (:id task))))))
 
 (println "ALL MODEL-PROPOSER TESTS PASSED")
+
+(shutdown-agents)

@@ -235,6 +235,21 @@
 
 ;; -- out-of-process command running ------------------------------------------
 
+(defn- stream-reader
+  "Read `stream` to a string on a daemon Java thread and return a promise of
+  it. `future` is deliberately avoided: jolt's future pool keeps an idle
+  worker alive ~60s, so a `jolt run` script that shells out would otherwise
+  hang a full minute after its last form before the process exits. A daemon
+  thread does not keep the process alive, and the promise preserves the
+  deref-with-timeout contract."
+  [stream]
+  (let [p (promise)]
+    (doto (Thread. (fn [] (try (deliver p (slurp stream))
+                               (catch Throwable _ (deliver p "")))))
+      (.setDaemon true)
+      (.start))
+    p))
+
 (defn run-command
   "Run argv out-of-process; returns {:exit int|nil :out string :timeout? bool}.
   stderr is merged into :out. Shared by the must-be-able-to-fail proof at
@@ -243,7 +258,7 @@
   (let [pb (doto (ProcessBuilder. ^java.util.List (java.util.ArrayList. (map str argv)))
              (.redirectErrorStream true))
         p (.start pb)
-        reader (future (slurp (.getInputStream p)))
+        reader (stream-reader (.getInputStream p))
         exited? (.waitFor p (long (or timeout-ms 8000)) java.util.concurrent.TimeUnit/MILLISECONDS)]
     (if exited?
       {:exit (.exitValue p) :out (deref reader 8000 "") :timeout? false}
@@ -258,7 +273,7 @@
   (let [pb (doto (ProcessBuilder. ^java.util.List (java.util.ArrayList. (map str argv)))
              (.redirectErrorStream true))
         p (.start pb)
-        reader (future (slurp (.getInputStream p)))]
+        reader (stream-reader (.getInputStream p))]
     (loop [deadline (+ (System/currentTimeMillis) timeout-ms)]
       (if (.waitFor p poll-ms java.util.concurrent.TimeUnit/MILLISECONDS)
         {:exit (.exitValue p) :out (deref reader 8000 "") :timeout? false :interrupted? false}

@@ -49,6 +49,10 @@
                 (map? (:args call))
                 (vector? (get-in call [:args :argv]))
                 (seq (get-in call [:args :argv]))))
+         (contains? action :spawn)
+         (let [children (:children (:spawn action))]
+           (and (vector? children) (seq children)
+                (every? #(and (map? %) (string? (:task %)) (seq (:task %))) children)))
          :else false))))
 
 (defn routed-provider
@@ -106,7 +110,8 @@
         breaker (atom {:failures 0 :open? false})
         repair-note (str (or (:guidance opts) "")
                          " Return a valid action: exactly one of "
-                         "{:tool-call {:name .. :args {:argv [..]}}} or {:done ..}.")
+                         "{:tool-call {:name .. :args {:argv [..]}}}, "
+                         "{:spawn {:children [{:task ..}]}} (parallel subagents), or {:done ..}.")
         ladder (or (:escalation-ladder opts)
                    [{:role :repair :attempts max-repairs}
                     {:role :escalate :attempts max-escalations}])

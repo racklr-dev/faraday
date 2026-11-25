@@ -200,3 +200,5 @@
   (check-true "interruptible command returns fast" (< (- (System/currentTimeMillis) start) 5000)))
 
 (println "ALL HARNESS TESTS PASSED")
+
+(shutdown-agents)

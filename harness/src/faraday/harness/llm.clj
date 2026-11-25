@@ -35,31 +35,58 @@
 
 (declare curl-http content->action)
 
-(defn completion->action
-  "Call chat/completions with cfg (which may carry :tools) and turn the
-  response into a canonical action: {:tool-call ..} / {:tool-calls [..]} from
-  native message.tool_calls, or a parsed EDN action / plain-text string from
-  message.content. Returns nil when neither is present."
+(defn response-usage
+  "Token usage from a parsed chat/completions response, restricted to the token
+  fields: {:prompt_tokens .. :completion_tokens .. :total_tokens ..}. nil when
+  the provider omitted :usage."
+  [resp]
+  (let [u (:usage resp)]
+    (when (map? u)
+      (not-empty (select-keys u [:prompt_tokens :completion_tokens :total_tokens])))))
+
+(defn completion->result
+  "Call chat/completions with cfg (which may carry :tools) and return
+  {:action .. :usage ..} from the one response. :action is the canonical action
+  — {:tool-call ..} / {:tool-calls [..]} from native message.tool_calls, or a
+  parsed EDN action / plain-text string from message.content, or nil when
+  neither is present — and :usage is response-usage. Splitting the two out of
+  one HTTP call lets a cost-tracking caller avoid re-calling the model."
   [cfg messages]
   (let [body (curl-http cfg messages)
         resp (json/read-str body :key-fn keyword)
         msg (get-in resp [:choices 0 :message])
-        tcs (seq (:tool_calls msg))]
-    (cond
-      tcs
-      (let [calls (mapv (fn [tc]
-                          {:name (get-in tc [:function :name])
-                           :args (try (json/read-str (get-in tc [:function :arguments]) :key-fn keyword)
-                                      (catch Exception _ {}))})
-                        tcs)]
-        (if (= 1 (count calls)) {:tool-call (first calls)} {:tool-calls calls}))
+        tcs (seq (:tool_calls msg))
+        action (cond
+                 tcs
+                 (let [calls (mapv (fn [tc]
+                                     {:name (get-in tc [:function :name])
+                                      :args (try (json/read-str (get-in tc [:function :arguments]) :key-fn keyword)
+                                                 (catch Exception _ {}))})
+                                   tcs)]
+                   (if (= 1 (count calls)) {:tool-call (first calls)} {:tool-calls calls}))
 
-      (seq (:content msg))
-      (let [c (:content msg)
-            a (try (content->action c) (catch Exception _ nil))]
-        (or a c))
+                 (seq (:content msg))
+                 (let [c (:content msg)
+                       a (try (content->action c) (catch Exception _ nil))]
+                   (or a c))
 
-      :else nil)))
+                 :else nil)]
+    {:action action :usage (response-usage resp)}))
+
+(defn completion->action
+  "The action half of completion->result (the historical contract: callers that
+  do not track usage keep the same return value)."
+  [cfg messages]
+  (:action (completion->result cfg messages)))
+
+(defn add-usage
+  "Accumulate one response's :usage into a running token total. Returns a map
+  with :prompt_tokens/:completion_tokens/:total_tokens summed, and :requests
+  incremented even when `usage` is nil (a billed call with no usage data still
+  counts as a request)."
+  [total usage]
+  (merge-with + (assoc total :requests (inc (or (:requests total) 0)))
+              (or usage {})))
 
 (defn curl-http
   "The real transport: POST chat/completions over curl. cfg is {:base-url

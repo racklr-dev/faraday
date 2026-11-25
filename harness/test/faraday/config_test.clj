@@ -276,4 +276,22 @@
   (check "resolve-mounts readonly first" true (:readonly? (first ms)))
   (check "resolve-mounts rw second" false (:readonly? (second ms))))
 
+;; -- project precedence (:project-root / :proj-root) ---------------------------
+(let [user (tmpfile {:chat {:wrap 80 :model "user-model"}})
+      root (str (System/getProperty "java.io.tmpdir") "/faraday-proj-" (System/nanoTime))
+      _ (.mkdirs (java.io.File. (str root "/.faraday")))
+      proj (str root "/.faraday/settings.json")
+      _ (spit proj (json/write-str {:chat {:wrap 100}}))]
+  (check "project-root helper prefers :project-root" root (c/project-root {:project-root root :proj-root "/x"}))
+  (check "project-root helper falls back to :proj-root" root (c/project-root {:proj-root root}))
+  (let [cfg (c/load-config {:settings-file user :proj-root root})]
+    (check "project settings load via :proj-root" 100 (get-in cfg [:chat :wrap]))
+    (check "user setting still merges below project" "user-model" (get-in cfg [:chat :model])))
+  (let [cfg (c/load-config {:settings-file user :project-root root})]
+    (check "project settings load via :project-root" 100 (get-in cfg [:chat :wrap])))
+  (let [other (tmpfile {:chat {:wrap 70}})
+        cfg (c/load-config {:settings-file user :project-settings-file other})]
+    (check "explicit :project-settings-file wins" 70 (get-in cfg [:chat :wrap]))))
+
 (println "ALL CONFIG TESTS PASSED")
+(shutdown-agents)

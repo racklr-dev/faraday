@@ -1,0 +1,54 @@
+# faraday theme: tungsten — nodecode's Tungstene (live) values.
+# Dark canvas is transparent ("default"): the terminal's own background shows
+# through, exactly as nodecode's transparent-background theme does. Light is a
+# warm-light variant in the same spirit (derived from nodecode's Blueprint
+# Daylight). Every role is named for both modes so the fallback base stays
+# invisible in normal use.
+
+[dark]
+canvas       = "default"
+chrome-bar   = "#100e0d"
+sheet        = "#292524"
+composer     = "#3b3937"
+code-slab    = "#1b2125"
+selection    = "#f97316"
+hover        = "#100e0d"
+key-chip     = "#57534e"
+heading-band = "#1d374b"
+user-block   = "#3b3937"
+body         = "#e7e5e4"
+muted        = "#78716c"
+chrome       = "#d6d3d1"
+user         = "#fb923c"
+assistant    = "#55bfa3"
+tool         = "#fca864"
+heading      = "#bcdcf5"
+inline-code  = "#7fb0d7"
+link         = "#6ea8ff"
+accent       = "#fca864"
+strong       = "#fca864"
+danger       = "#ef4444"
+
+[light]
+canvas       = "#f4f7fb"
+chrome-bar   = "#e3eaf4"
+sheet        = "#ffffff"
+composer     = "#ffffff"
+code-slab    = "#e9eff7"
+selection    = "#cfe0f7"
+hover        = "#e6edf7"
+key-chip     = "#dbe5f3"
+heading-band = "#dbeafe"
+user-block   = "#ffffff"
+body         = "#1b2733"
+muted        = "#5c6f87"
+chrome       = "#33455c"
+user         = "#0f5bb5"
+assistant    = "#0d6b41"
+tool         = "#0f6f5c"
+heading      = "#1450a3"
+inline-code  = "#0f5bb5"
+link         = "#1d6fd1"
+accent       = "#1d6fd1"
+strong       = "#a01a58"
+danger       = "#b91c1c"

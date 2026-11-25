@@ -27,7 +27,7 @@
   (ui/mount root :window [(c/app chat-opts)])
   (tui/frame!)
   (let [text (apply str (scr/lines screen))]
-    (check-true "chat renders the composer" (str/includes? text "ask faraday"))
+    (check-true "chat renders the composer" (str/includes? text "Ready"))
     (check-true "chat renders the status line" (str/includes? text "model"))
     (check-true "chat renders the quit hint" (str/includes? text "ctrl+c quit"))))
 
