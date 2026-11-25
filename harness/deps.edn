@@ -1,4 +1,4 @@
-{:paths ["src"]
+{:paths ["src" "resources"]
 
  :deps {racklr-dev/jolt-markdown
         {:local/root "../../jolt-markdown"}
@@ -37,7 +37,7 @@
 
         racklr-dev/jolt-sandbox
         {:git/url "https://github.com/racklr-dev/jolt-sandbox"
-         :git/sha "677b2d7a72b860d252e717ded7ea5e4ed16a3439"}
+         :git/sha "1ce269018b2f7273952669ceea1580e375844bef"}
 
         racklr-dev/faraday-console
         {:local/root "../console"}}}
