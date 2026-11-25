@@ -618,6 +618,15 @@
                            (swap! state assoc :failed? true :boot-error msg)
                            (recycle-pool!))
                          {:status :error :error msg :fatal? boot?}))))))))
+     :warm! (fn []
+              ;; boot the pool eagerly so faraday starts with a warm VM
+              ;; instead of paying the boot (and any boot failure) on the
+              ;; first tool call. Returns :ok, or the error string on failure.
+              (try (ensure-pool!) :ok
+                   (catch Exception e
+                     (let [msg (str "sandbox boot failed (" (or (ex-message e) "?") ")")]
+                       (swap! state assoc :failed? true :boot-error msg)
+                       msg))))
      :close (fn []
               (when-let [p (:pool @state)]
                 (try (sb-close-pool! p) (catch Exception _ nil))))}))
@@ -2316,7 +2325,14 @@
                                          :mounts mounts
                                          :packages (:apk-packages sandbox-cfg)
                                          :nix-flake (:nix-flake sandbox-cfg)
-                                 :egress (:egress sandbox-cfg)}))
+                                         :egress (:egress sandbox-cfg)}))
+        _ (when sandbox
+            (binding [*out* *err*] (println "warming sandbox VM (first boot)…"))
+            (when-let [err (:warm! sandbox)]
+              (binding [*out* *err*]
+                (println "⚠ faraday: could not warm the sandbox VM — " err)
+                (println "   retry, or run with --exec shell to use host exec."))
+              (System/exit 1)))
         sandbox-ctx (when sandbox
                       (str "Tools run in a jolt-sandbox microVM (alpine); the workspace is mounted at its own host path, so host paths work inside"
                            (when (:nix-flake sandbox-cfg)
