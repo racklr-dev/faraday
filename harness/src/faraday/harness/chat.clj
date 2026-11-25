@@ -621,8 +621,8 @@
      :warm! (fn []
               ;; boot the pool eagerly so faraday starts with a warm VM
               ;; instead of paying the boot (and any boot failure) on the
-              ;; first tool call. Returns :ok, or the error string on failure.
-              (try (ensure-pool!) :ok
+              ;; first tool call. Returns nil on success, else the error string.
+              (try (ensure-pool!) nil
                    (catch Exception e
                      (let [msg (str "sandbox boot failed (" (or (ex-message e) "?") ")")]
                        (swap! state assoc :failed? true :boot-error msg)
