@@ -27,6 +27,7 @@
             [glimmer.core :as ui]
             [glimmer.ratom :as r]
             [glimmer-tui.core :as tui]
+            [glimmer-tui.screen :as scr]
             [glimmer-tui.keys :as k]
             [glimmer-tui.widget :as w]
             [glimmer-tui.widgets.scroll :as scroll]
@@ -90,11 +91,12 @@
        "\n"
        "Working rules:\n"
        "- Treat the user message as the task. If it is terse or ambiguous, make the smallest reasonable assumption and start; ask a question only when the choice changes the work itself.\n"
-       "- Read before you change. Prefer one targeted command over several probes.\n"
+       "- Plan then edit: in your FIRST tool turn, say (in one short line) exactly which files you will change and what each change is, then execute. Do not keep reading after you have enough to make the edit.\n"
+       "- Read surgically: prefer grep -n PATTERN file and sed -n A,Bp file over cat of a whole file. Whole-file dumps are truncated and burn your turn budget.\n"
        "- In run_shell the project directory is mounted at its own host path, so the paths in Context work verbatim. Board/scope/hook tools only work when Context says the taskboard is ready.\n"
        "- Never repeat a failed command unchanged — adapt it.\n"
        "- When the task is to show, read, print, or inspect a file (or its contents), answer with the file's full text verbatim — never a summary, and never 'see the tool output above'. Paste the whole file raw, no surrounding fence; it renders inline.\n"
-       "- Your turn budget is small: stop and answer as soon as you have the result.\n"
+       "- Budget: you have a limited number of tool turns. Spend the first third reading, the rest editing and verifying. When the turn reminder says turns are low, STOP reading and make the edit with what you have.\n"
        "\n"
        "Answer with {:done \"...\"} (or plain text for a short answer). Report concretely: files changed or commands run, and what you verified. When the task was to show/read a file, the answer is the file's contents in full. No preamble, no filler."))
 
@@ -427,6 +429,20 @@
   "Bound by chat-session around run-turn! on the worker thread; tool executors
   poll it to stop a running command mid-flight." nil)
 
+(def ^:private dump-guard-re
+  #"(?:(?:^|[;&|]\s*)|(?:bash|sh)\s+(?:-lc|-c)\s+)(?:cat\s+\S|head\s+-n\s*[0-9]{4,}\s+\S)")
+
+(defn- dump-guard
+  "A guidance message when argv would dump a whole file, else nil. Lives at the
+  exec seam so a `cat file` never floods the model context: the model is told to
+  re-read surgically instead of being allowed the dump."
+  [argv]
+  (let [cmd (str/join " " (map str argv))]
+    (when (re-find dump-guard-re cmd)
+      (str "Blocked: this would dump a whole file and flood the context. "
+           "Reads are capped at ~80 lines. Use `grep -n PATTERN file` to find the line, "
+           "then `sed -n A,Bp file` (keep B-A <= 80) to read just that part."))))
+
 (defn host-exec
   "The default tool executor: run argv on the host in faraday's cwd, or evaluate
   a run_<lang> tool's :code via a scratch file. Returns
@@ -445,7 +461,9 @@
       {:status :error :error (str "unknown tool " (pr-str name))}
 
       :else
-      (let [r (if *interrupt*
+      (if-let [guard (dump-guard argv)]
+        {:status :error :error guard}
+        (let [r (if *interrupt*
                 (h/run-command-interruptible argv 120000 *interrupt*)
                 (h/run-command argv 120000))]
         (cond
@@ -459,7 +477,7 @@
           {:status (if (zero? (:exit r)) :ok :error)
            :exit (:exit r)
            :stdout (:out r)
-           :stderr ""})))))
+           :stderr ""}))))))
 
 (defn- argv->cmd
   "Single-quote each argv element for the guest sh."
@@ -570,8 +588,10 @@
                             (:argv args))]
                  (if (not (and (vector? argv) (seq argv)))
                    {:status :error :error "tool args must be {:argv [..]}, or {:code \"...\"} for a run_* tool"}
-                   (try
-                     (let [p (ensure-pool!)
+                   (if-let [guard (dump-guard argv)]
+                     {:status :error :error guard}
+                     (try
+                       (let [p (ensure-pool!)
                            r (sb-pool-exec p (argv->cmd argv) :timeout-ms 120000 :cwd workspace :interrupt *interrupt*)]
                        (if (:interrupted? r)
                          {:status :error :error "interrupted" :interrupted? true}
@@ -594,7 +614,7 @@
                          (if boot?
                            (swap! state assoc :failed? true :boot-error msg)
                            (recycle-pool!))
-                         {:status :error :error msg :fatal? boot?})))))))
+                         {:status :error :error msg :fatal? boot?}))))))))
      :close (fn []
               (when-let [p (:pool @state)]
                 (try (sb-close-pool! p) (catch Exception _ nil))))}))
@@ -663,6 +683,23 @@
     (swap! state assoc :busy? false :error nil)
     text))
 
+(defn- truncate-tool-out
+  "Cap a tool's output so a whole-file dump cannot flood the model's context.
+  The marker tells the model to re-read the needed part with sed/grep."
+  [s]
+  (let [s (str s)
+        lines (str/split-lines s)
+        max-lines 80
+        max-chars 10000]
+    (cond
+      (> (count lines) max-lines)
+      (str (str/join "\n" (take max-lines lines))
+           "\n… [truncated " (- (count lines) max-lines) " more lines — use sed -n / grep -n for the part you need]")
+      (> (count s) max-chars)
+      (str (subs s 0 max-chars)
+           "\n… [truncated — use sed -n / grep -n for the part you need]")
+      :else s)))
+
 (defn run-turn!
   "Drive one agentic turn: loop model call -> tool exec until the model answers.
   opts: :call (fn messages -> content), :exec (fn name args -> result), :system,
@@ -682,13 +719,24 @@
                      {:role :tool-result :name name
                       :status (:status res)
                       :exit (:exit res)
-                      :text (or (:stdout res) (:stderr res) "")
+                      :text (truncate-tool-out (or (:stdout res) (:stderr res) ""))
                       :error (:error res)
                       :fatal? (true? (:fatal? res))
                       :interrupted? (true? (:interrupted? res))
                       :progress? progress?}]))
-        step! (fn [es]
-                (let [resp (call (build-messages system es))
+        budget-note (fn [left]
+                       (cond
+                         (<= left 2)
+                         "Only 2 tool turns left: do not read any more files — make the edit (or give the answer) now with what you already have."
+                         (<= left 4)
+                         "A few tool turns left: start editing now; only read a file if one targeted read unblocks the edit."
+                         :else nil))
+        step! (fn [es left]
+                (let [msgs (build-messages system es)
+                      msgs (if-let [note (budget-note left)]
+                             (conj msgs {:role "user" :content note})
+                             msgs)
+                      resp (call msgs)
                       action (if (string? resp) (parse-action resp) resp)
                       tcs (cond
                             (:tool-call action) [(:tool-call action)]
@@ -719,7 +767,7 @@
                     (do
                       (swap! state update :messages conj {:role :assistant :text (str (or resp ""))})
                       :done))))]
-    (loop [left (or max-turns 12)
+    (loop [left (or max-turns 24)
            stall 0
            es entries]
       (cond
@@ -736,7 +784,7 @@
             (swap! state assoc :busy? false :error nil))
 
         :else
-        (let [outcome (try (step! es)
+        (let [outcome (try (step! es left)
                            (catch Exception e
                              {:fault (or (ex-message e) "turn failed")}))]
           (cond
@@ -760,11 +808,11 @@
 ;; -- the UI -------------------------------------------------------------------
 
 (defn- root-widget
-  "The live root widget atom, or nil. Reached through glimmer's private live-root
-  because no public getter exists; this is only for pinning the transcript scroll
-  to the bottom and fails closed."
+  "The live root widget atom, or nil, from the running glimmer-tui app. The
+  transcript scroll lives inside it; this is only for pinning that scroll to the
+  bottom and fails closed."
   []
-  (:inst @@#'glimmer.core/live-root))
+  (:root @@#'glimmer-tui.core/app))
 
 (defn- find-scroll-widget
   [w]
@@ -774,15 +822,15 @@
       (some find-scroll-widget (:children @w)))))
 
 (defn- scroll-to-bottom!
-  "Pin the transcript scroll to the bottom on the loop thread. Setting :y-offset
-  to a huge number is enough: arrange-scroll clamps it to the fresh max offset
-  at layout time, so this never needs the current layout."
+  "Pin the transcript scroll to the bottom. Every caller runs on the loop thread
+  (the every! timer, send!, the pending flush), so the mutation is done inline
+  rather than scheduled. Setting :y-offset to a huge number is enough:
+  arrange-scroll clamps it to the fresh max offset at layout time, so this never
+  needs the current layout."
   []
-  (ui/on-gui
-   (fn []
-     (when-let [sw (some-> (root-widget) find-scroll-widget)]
-       (swap! sw update :state assoc :x-offset 0 :y-offset 2147483647)
-       (w/touch!)))))
+  (when-let [sw (some-> (root-widget) find-scroll-widget)]
+    (swap! sw update :state assoc :x-offset 0 :y-offset 2147483647)
+    (w/touch!)))
 
 (defn- transcript-scroll!
   "Scroll the transcript viewport by what `ev` implies. The composer entry is
@@ -824,14 +872,25 @@
                           (and (= :by kind) (pos? (second move)) (not moved?)))
                   (reset! follow? true))))))))))
 
+  (defn- live-cols
+  "Live terminal columns: the mounted glimmer-tui screen when present (the
+  authoritative size for the chat TUI — jolt.host/term-size reports the jolt
+  REPL's terminal, not faraday's), else jolt.host/term-size, else nil."
+  []
+  (or (try (let [[c _] (scr/size (:screen @@#'glimmer-tui.core/app))]
+             (when (pos? c) c))
+           (catch Throwable _ nil))
+      (try (let [[_ c] (jolt.host/term-size)] c)
+           (catch Throwable _ nil))))
+
   (defn- wrap-width
   "Columns to wrap transcript text to. Live terminal width wins (minus the
   scrollbar column and a one-column inset); an explicit :wrap (--wrap flag or
-  chat.wrap) is used literally; headless falls back to 92."
-  [opts]
+  chat.wrap) is used literally; headless falls back to 92. `cols`, when given,
+  is the live width the caller already measured."
+  [opts & [cols]]
   (let [explicit (:wrap opts)
-        live (try (let [[_ c] (jolt.host/term-size)] c)
-                  (catch Throwable _ nil))
+        live (or cols (live-cols))
         cols (or explicit live 92)]
     (max 24 (- (long cols) (if (and live (not explicit)) 2 0)))))
 
@@ -932,7 +991,7 @@
     :assistant
     (mapcat
      (fn [seg]
-       (conj (vec (case (:t seg)
+       (case (:t seg)
          :code [{:t :code :role :assistant
                  :lines (vec (mapcat #(hard-wrap % wrap) (:lines seg)))}]
          :hr [{:t :hr :role :assistant}]
@@ -942,38 +1001,42 @@
                     :lines (md/wrap-spans (:spans seg) wrap)}]
          (let [lines (md/wrap-spans (:spans seg) wrap)
                kind (:kind seg)]
-           (cond
-             (= :bullet kind)
-             (map-indexed
-              (fn [i line]
-                {:t :line :role :assistant
-                 :kind (if (zero? i) :bullet :bullet-cont)
-                 :text (md/spans-text line)
-                 :spans line})
-              lines)
-             (= :task kind)
-             (map-indexed
-              (fn [i line]
-                (cond-> {:t :line :role :assistant
-                         :kind (if (zero? i) :task :task-cont)
-                         :text (md/spans-text line)
-                         :spans line}
-                  (zero? i) (assoc :checked? (:checked? seg))))
-              lines)
-             (= :numbered kind)
-             (map-indexed
-              (fn [i line]
-                {:t :line :role :assistant
-                 :kind (if (zero? i) :numbered :numbered-cont)
-                 :num (:n seg)
-                 :text (md/spans-text line)
-                 :spans line})
-              lines)
-             :else
-             (map (fn [line] {:t :line :role :assistant :kind kind
-                              :text (md/spans-text line)
-                              :spans line})
-                  lines))))) {:t :spacer}))
+           (if (empty? lines)
+             ;; a blank markdown line stays one blank row, so paragraphs keep
+             ;; their separation while adjacent blocks (a tight list) touch
+             [{:t :spacer}]
+             (cond
+               (= :bullet kind)
+               (map-indexed
+                (fn [i line]
+                  {:t :line :role :assistant
+                   :kind (if (zero? i) :bullet :bullet-cont)
+                   :text (md/spans-text line)
+                   :spans line})
+                lines)
+               (= :task kind)
+               (map-indexed
+                (fn [i line]
+                  (cond-> {:t :line :role :assistant
+                           :kind (if (zero? i) :task :task-cont)
+                           :text (md/spans-text line)
+                           :spans line}
+                    (zero? i) (assoc :checked? (:checked? seg))))
+                lines)
+               (= :numbered kind)
+               (map-indexed
+                (fn [i line]
+                  {:t :line :role :assistant
+                   :kind (if (zero? i) :numbered :numbered-cont)
+                   :num (:n seg)
+                   :text (md/spans-text line)
+                   :spans line})
+                lines)
+               :else
+               (map (fn [line] {:t :line :role :assistant :kind kind
+                                :text (md/spans-text line)
+                                :spans line})
+                    lines))))))
      (markdown-segments (:text e)))
 
     :tool-call
@@ -1449,13 +1512,13 @@
   (let [full-cfg (config/load-config opts)
         cfg (r/atom (config/resolve-chat full-cfg opts))
         strong (config/resolve-provider full-cfg :deepseek-pro opts)
-        wrap (wrap-width opts)
+        cols (r/atom nil)
         breaker (atom {:failures 0 :open? false})
         usage (r/atom {:prompt_tokens 0 :completion_tokens 0 :total_tokens 0 :requests 0})
         call (or (:call opts)
                  (with-circuit-breaker breaker #(model-step @cfg strong % usage)))
         exec (or (:exec opts) host-exec)
-        max-turns (or (:max-turns opts) 12)
+        max-turns (or (:max-turns opts) 24)
         stores (:session opts)
         thread-id (:thread-id opts)
         thread-ref (atom thread-id)
@@ -1492,6 +1555,8 @@
         _ (tui/every! 100
                       (fn []
                         (when (:busy? @state) (swap! tick inc))
+                        (let [c (or (live-cols) 92)]
+                          (when (not= c @cols) (reset! cols c)))
                         (let [msgs (:messages @state)
                               busy? (:busy? @state)]
                           (when (and @follow? (not (identical? msgs @last-messages)))
@@ -2058,7 +2123,8 @@
                   (scroll-to-bottom!)
                   ((:send! sess) text)))))]
     (fn []
-      (let [{:keys [messages busy? error]} @state]
+      (let [{:keys [messages busy? error]} @state
+            wrap (wrap-width opts (or @cols (live-cols) 92))]
         [:vbox {:spacing 0 :padding [0 1 0 1]
                 :bg (themes/color :canvas)
                 :on-key (fn [ev]
