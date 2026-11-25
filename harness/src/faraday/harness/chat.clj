@@ -717,9 +717,10 @@
   Appends entries to `state` and clears :busy?; on a fault or stall sets :error.
   Safe to run on a worker thread (only ratom swaps, no widget touches)."
   [opts state entries]
-  (let [{:keys [call exec system max-turns max-stall]} opts
+  (let [{:keys [call exec system max-turns max-stall goal-fn context-budget]} opts
         interrupt (or *interrupt* (:interrupt opts) (atom false))
         max-stall (or max-stall 3)
+        context-budget (or context-budget 40)
         run-one (fn [name args]
                   (let [attempt (fn [res]
                                   [{:role :tool-call :name name :args args}
@@ -788,6 +789,14 @@
            stall 0
            es entries]
       (cond
+        (and goal-fn (goal-fn {:entries es :state @state}))
+        (force-final-answer! call system es state
+          "The goal is met — give your final answer now.")
+
+        (> (count es) (* 3 context-budget))
+        (force-final-answer! call system es state
+          "Your context is full — give your best final answer now.")
+
         (zero? left)
         (force-final-answer! call system es state
           "You have used every tool turn.")
