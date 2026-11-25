@@ -40,4 +40,8 @@
          :git/sha "593139f42a98d128f7fba1aa541b342b55078b20"}
 
         racklr-dev/faraday-console
-        {:local/root "../console"}}}
+        {:local/root "../console"}
+
+        jlt-commons/lev
+        {:git/url "https://github.com/jlt-commons/lev"
+         :git/sha "65c2581e31915e7884be9b561654b08266aad730"}}}

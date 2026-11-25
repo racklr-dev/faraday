@@ -6,7 +6,8 @@
 ;; wins, and the reason goes back to the model as the refusal, so the model
 ;; learns the rule at the moment it applies.
 (ns faraday.harness.guard
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [faraday.harness.lev-guard :as lev-guard]))
 
 (def ^:private shell-rules
   "Ordered shell command rules. Reject rules come first."
@@ -99,6 +100,12 @@
         "No task is claimed — claim one first (task_set_status <id> in_progress) before changing task status.")
 
       (contains? #{"run_shell" "shell" "exec"} name)
-      (shell-refusal (:argv args) claimed?)
+      (or (shell-refusal (:argv args) claimed?)
+          (lev-guard/verdict (str/join " " (map str (:argv args))) claimed?))
+
+      ;; jolt/code eval tools: the payload is :code, not :argv; the regex floor
+      ;; cannot see inside it, so lev (when available) is the classifier here.
+      (re-matches #"run_[a-z0-9-]+" (str name))
+      (lev-guard/verdict (str (:code args)) claimed?)
 
       :else nil)))
