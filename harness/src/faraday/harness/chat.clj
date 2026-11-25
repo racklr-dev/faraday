@@ -19,6 +19,7 @@
             [faraday.harness.commands :as cmd]
             [faraday.harness.config :as config]
             [faraday.harness.dialog :as dialog]
+            [faraday.harness.guard :as guard]
             [faraday.harness.llm :as llm]
             [faraday.harness.session :as session]
             [faraday.harness.settings :as settings]
@@ -998,39 +999,6 @@
                   (= "done" (:status (:args e)))))
            entries))))
 
-(def ^:private write-re
-  #"(?:sed\s+(-i|--in-place)|\bmv\s|\bcp\s|\brm\s|\binstall\s|\btee\s|\btouch\s|\bmkdir\s|\brmdir\s|\bgit\s+(add|commit|push|mv|rm)\b|\bperl\s+-pi\b|\bsponge\b|>>|\s>\s*[^/&][^&\s]*)")
-
-(defn- shell-write?
-  "True when a shell argv writes files (in-place sed, write verbs, redirects)."
-  [argv]
-  (boolean (re-find write-re (str/join " " (map str argv)))))
-
-(defn- mutating-tool-call?
-  "Board mutations of an existing task, and shell commands that write files."
-  [{:keys [name args]}]
-  (or (and (= "task_set_status" name)
-           (not= "in_progress" (:status args)))
-      (and (contains? #{"run_shell" "shell" "exec"} name)
-           (shell-write? (:argv args)))))
-
-(defn- claimed-task?
-  "True when the transcript shows a task moved to in_progress (claimed)."
-  [entries]
-  (boolean
-   (some (fn [e]
-           (and (= :tool-call (:role e))
-                (= "task_set_status" (:name e))
-                (= "in_progress" (:status (:args e)))))
-         entries)))
-
-(defn- task-claim-guard
-  "Refuse mutating changes until a task is claimed (in_progress). Returns a
-  refusal string or nil."
-  [tc entries]
-  (when (and (mutating-tool-call? tc) (not (claimed-task? entries)))
-    "No task is claimed — claim one first (task_set_status <id> in_progress) before making changes."))
-
 (defn chat-session
   "A headless chat: owns the transcript and drives the tool loop. Returns
   {:state (ratom {:messages :busy? :error}) :send! (fn text)
@@ -1059,7 +1027,7 @@
                                       :max-turns max-turns :max-stall max-stall
                                       :interrupt interrupt
                                       :goal-fn (when task-id (task-done-goal task-id))
-                                      :guard task-claim-guard}
+                                      :guard guard/verdict}
                                      state es))
                         (when (and stores thread-id)
                           (try (session/persist! stores (deref-thread thread-id) (:messages @state))
