@@ -7,7 +7,8 @@
   (:require [clojure.data.json :as json]
             [clojure.edn :as edn]
             [clojure.string :as str]
-            [faraday.harness :as h]))
+            [faraday.harness :as h]
+            [faraday.harness.context :as ctx]))
 
 (def default-system
   "You are faraday's agent loop. Decide the next action.")
@@ -35,14 +36,66 @@
 
 (declare curl-http content->action)
 
+(defn- reported-count
+  "The count a provider actually reported across several dialect spellings: the
+  first positive integer, else the first reported zero, else nil. A relay that
+  emits both dialects and zeroes the unused one must not make the real count
+  vanish (nodecode REPORTED-COUNT)."
+  [& values]
+  (or (some #(when (and (integer? %) (pos? %)) %) values)
+      (some #(when (integer? %) %) values)))
+
+(defn cache-usage
+  "The cache + reasoning fields nodecode's apply-chat-usage keeps, read from a
+  chat/completions :usage map: :cached-input-tokens (cache read),
+  :cache-write-tokens (cache creation input), :cache-write-5m-tokens,
+  :cache-write-1h-tokens, :reasoning-tokens. Absent fields are omitted, so a
+  provider that never reports cache yields {}. Reads both dialect spellings:
+  cache_read_tokens and prompt_tokens_details.cached_tokens (OpenAI chat), and
+  the cache_creation_input_tokens / cache_write_tokens pair."
+  [u]
+  (when (map? u)
+    (let [details (or (:prompt_tokens_details u) (:input_tokens_details u))
+          creation (:cache_creation u)
+          cached (reported-count (:cache_read_tokens u)
+                                 (get details :cached_tokens))
+          write (reported-count (:cache_creation_input_tokens u)
+                                (:cache_write_tokens u)
+                                (get details :cache_write_tokens))
+          five (reported-count (:cache_write_5m_tokens u)
+                               (:cache_write_5_minute_tokens u)
+                               (get creation :ephemeral_5m_input_tokens))
+          one (reported-count (:cache_write_1h_tokens u)
+                              (:cache_write_1_hour_tokens u)
+                              (get creation :ephemeral_1h_input_tokens))
+          reasoning (reported-count (get-in u [:completion_tokens_details :reasoning_tokens])
+                                    (get-in u [:output_tokens_details :reasoning_tokens]))]
+      (cond-> {}
+        cached (assoc :cached-input-tokens cached)
+        write (assoc :cache-write-tokens write)
+        five (assoc :cache-write-5m-tokens five)
+        one (assoc :cache-write-1h-tokens one)
+        reasoning (assoc :reasoning-tokens reasoning)))))
+
+(defn uncached-prompt-tokens
+  "Prompt tokens billed at the full input rate: prompt_tokens minus the
+  cache-read share (OpenAI chat dialect; Anthropic already excludes it, so a
+  usage map without :cached-input-tokens returns prompt_tokens unchanged)."
+  [usage]
+  (when-let [p (:prompt_tokens usage)]
+    (max 0 (- p (or (:cached-input-tokens usage) 0)))))
+
 (defn response-usage
-  "Token usage from a parsed chat/completions response, restricted to the token
-  fields: {:prompt_tokens .. :completion_tokens .. :total_tokens ..}. nil when
-  the provider omitted :usage."
+  "Token usage from a parsed chat/completions response: the three billing
+  fields {:prompt_tokens .. :completion_tokens .. :total_tokens ..}, plus the
+  cache/reasoning split cache-usage reads when the provider reported it. nil
+  when the provider omitted :usage."
   [resp]
-  (let [u (:usage resp)]
+  (when-let [u (:usage resp)]
     (when (map? u)
-      (not-empty (select-keys u [:prompt_tokens :completion_tokens :total_tokens])))))
+      (not-empty
+       (merge (select-keys u [:prompt_tokens :completion_tokens :total_tokens])
+              (cache-usage u))))))
 
 (defn completion->result
   "Call chat/completions with cfg (which may carry :tools) and return
@@ -71,7 +124,16 @@
                    (or a c))
 
                  :else nil)]
-    {:action action :usage (response-usage resp)}))
+    (let [usage (response-usage resp)]
+      ;; nodecode's self-calibration: this round's measured prompt over the
+      ;; chars/4 estimate becomes the (provider, model) ratio the next round's
+      ;; estimate scales by, so an unchanged request estimates at exactly what
+      ;; the server counted. No-op when cfg lacks :provider/:model or :usage.
+      (when-let [measured (:prompt_tokens usage)]
+        (ctx/observe-context-estimate!
+         (:provider cfg) (:model cfg)
+         (ctx/estimate-messages-tokens messages) measured))
+      {:action action :usage usage})))
 
 (defn completion->action
   "The action half of completion->result (the historical contract: callers that

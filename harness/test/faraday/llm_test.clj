@@ -65,4 +65,43 @@
             :usage {:prompt_tokens 2 :completion_tokens 1 :total_tokens 3}}
            (llm/completion->result {} []))))
 
+;; -- cache usage (dialect-aware) ---------------------------------------------
+(check "cache-usage reads the OpenAI chat cache fields"
+       {:cached-input-tokens 20 :cache-write-tokens 100 :cache-write-5m-tokens 60
+        :cache-write-1h-tokens 40 :reasoning-tokens 7}
+       (llm/cache-usage {:prompt_tokens 120 :completion_tokens 30 :total_tokens 150
+                         :prompt_tokens_details {:cached_tokens 20}
+                         :cache_creation_input_tokens 100
+                         :cache_write_5m_tokens 60
+                         :cache_write_1h_tokens 40
+                         :completion_tokens_details {:reasoning_tokens 7}}))
+
+(check "cache-usage reads the Anthropic/relay spellings"
+       {:cached-input-tokens 20 :cache-write-tokens 100}
+       (llm/cache-usage {:cache_read_tokens 20 :cache_write_tokens 100}))
+
+(check "cache-usage is empty when the provider reports no cache"
+       {}
+       (llm/cache-usage {:prompt_tokens 10 :completion_tokens 5 :total_tokens 15}))
+
+(check "response-usage adds the cache split when reported"
+       {:prompt_tokens 120 :completion_tokens 30 :total_tokens 150
+        :cached-input-tokens 20 :cache-write-tokens 100}
+       (llm/response-usage {:usage {:prompt_tokens 120 :completion_tokens 30 :total_tokens 150
+                                    :prompt_tokens_details {:cached_tokens 20}
+                                    :cache_creation_input_tokens 100}}))
+
+(check "uncached-prompt-tokens subtracts the cache read"
+       100
+       (llm/uncached-prompt-tokens {:prompt_tokens 120 :cached-input-tokens 20}))
+
+(check "add-usage accumulates cache fields too"
+       {:prompt_tokens 30 :completion_tokens 15 :total_tokens 45 :requests 2
+        :cached-input-tokens 40 :cache-write-tokens 20}
+       (-> {:prompt_tokens 0 :completion_tokens 0 :total_tokens 0 :requests 0}
+           (llm/add-usage {:prompt_tokens 10 :completion_tokens 5 :total_tokens 15
+                           :cached-input-tokens 15 :cache-write-tokens 20})
+           (llm/add-usage {:prompt_tokens 20 :completion_tokens 10 :total_tokens 30
+                           :cached-input-tokens 25})))
+
 (println "ALL LLM TESTS PASSED")
