@@ -90,13 +90,11 @@
        (tools/language-prompt)
        "\n"
        "Working rules:\n"
-       "- Treat the user message as the task. If it is terse or ambiguous, make the smallest reasonable assumption and start; ask a question only when the choice changes the work itself.\n"
-       "- Plan then edit: in your FIRST tool turn, say (in one short line) exactly which files you will change and what each change is, then execute. Do not keep reading after you have enough to make the edit.\n"
-       "- Read surgically: prefer grep -n PATTERN file and sed -n A,Bp file over cat of a whole file. Whole-file dumps are truncated and burn your turn budget.\n"
+       "- Treat the user message as the task. Terse or ambiguous? Make the smallest reasonable assumption and start; ask only when the choice changes the work.\n"
+       "- Plan then edit: name the files and changes in one line, then execute — don't keep reading once you have enough.\n"
+       "- Read before you change; prefer grep -n / sed -n over whole-file dumps; never repeat a failed command unchanged.\n"
        "- In run_shell the project directory is mounted at its own host path, so the paths in Context work verbatim. Board/scope/hook tools only work when Context says the taskboard is ready.\n"
-       "- Never repeat a failed command unchanged — adapt it.\n"
-       "- When the task is to show, read, print, or inspect a file (or its contents), answer with the file's full text verbatim — never a summary, and never 'see the tool output above'. Paste the whole file raw, no surrounding fence; it renders inline.\n"
-       "- Budget: you have a limited number of tool turns. Spend the first third reading, the rest editing and verifying. When the turn reminder says turns are low, STOP reading and make the edit with what you have.\n"
+       "- When the task is to show or read a file, answer with the file's full text verbatim — never a summary, never 'see the tool output above'. Paste it raw, no fence.\n"
        "\n"
        "Answer with {:done \"...\"} (or plain text for a short answer). Report concretely: files changed or commands run, and what you verified. When the task was to show/read a file, the answer is the file's contents in full. No preamble, no filler."))
 
@@ -786,7 +784,7 @@
                     (do
                       (swap! state update :messages conj {:role :assistant :text (str (or resp ""))})
                       :done))))]
-    (loop [left (or max-turns 24)
+    (loop [left (or max-turns 96)
            stall 0
            es entries]
       (cond
@@ -1537,7 +1535,7 @@
         call (or (:call opts)
                  (with-circuit-breaker breaker #(model-step @cfg strong % usage)))
         exec (or (:exec opts) host-exec)
-        max-turns (or (:max-turns opts) 24)
+        max-turns (or (:max-turns opts) 96)
         stores (:session opts)
         thread-id (:thread-id opts)
         thread-ref (atom thread-id)
