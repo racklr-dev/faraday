@@ -62,6 +62,40 @@
        {:done "ok"}
        (chat/parse-action "```clojure\n{:done \"ok\"}\n```"))
 
+;; -- transcript->markdown -----------------------------------------------------
+(check "transcript->markdown: user+assistant"
+       "# faraday session\n\n## user\n\nhi\n\n## assistant\n\nok"
+       (chat/transcript->markdown [{:role :user :text "hi"}
+                                   {:role :assistant :text "ok"}]))
+(check "transcript->markdown: tool-call fences name + argv"
+       "# faraday session\n\n## tool-call\n\n```\n$ run_shell ls -la\n```"
+       (chat/transcript->markdown [{:role :tool-call :name "run_shell" :args {:argv ["ls" "-la"]}}]))
+(check "transcript->markdown: tool-result reuses format-tool-result"
+       "# faraday session\n\n## tool-result\n\ntool run_shell finished with status ok, exit 0:\nout"
+       (chat/transcript->markdown [{:role :tool-result :name "run_shell" :status :ok :exit 0 :text "out"}]))
+(check "transcript->markdown: system entry"
+       "# faraday session\n\n## system\n\nContext so far: x"
+       (chat/transcript->markdown [{:role :system :text "Context so far: x"}]))
+
+;; -- export-session! ----------------------------------------------------------
+(let [written (atom nil)]
+  (chat/export-session! [{:role :user :text "hi"}] "t1" "/tmp/faraday-export-test.md"
+                        {:spit-fn (fn [p md] (reset! written {:p p :md md}))})
+  (check "export-session! writes markdown via seam"
+         {:p "/tmp/faraday-export-test.md"
+          :md "# faraday session\n\n## user\n\nhi"}
+         @written))
+(let [written (atom nil)]
+  (chat/export-session! [{:role :user :text "hi"}] "t1" "" {:cwd "/tmp" :spit-fn (fn [p _] (reset! written p))})
+  (check "export-session! blank path -> cwd/faraday-<id>.md"
+         "/tmp/faraday-t1.md"
+         @written))
+(let [written (atom nil)]
+  (chat/export-session! [{:role :user :text "hi"}] "t1" "/tmp" {:spit-fn (fn [p _] (reset! written p))})
+  (check "export-session! directory -> default filename inside"
+         "/tmp/faraday-t1.md"
+         @written))
+
 ;; -- markdown highlighter --------------------------------------------------------
 (let [md #'chat/markdown-lines]
   (check "md: heading" [:heading "Title"] (first (md "# Title")))
@@ -186,6 +220,24 @@
     (tui/press! 338) (tui/drain!) (tui/frame!)   ; pgdn scrolls down
     (check "pgdn scrolls the transcript" true
            (not= before (apply str (scr/lines screen))))))
+
+;; -- composer kill/yank: ctrl+a/e/k + ctrl+y (readline loop) ----------------
+(let [fake-call (fn [_] "{:done \"ok\"}")
+      fake-exec (fn [_ _] {:status :ok :exit 0 :stdout ""})
+      app (chat/chat-app {:call fake-call :exec fake-exec :wrap 40})
+      root (w/node :window {})
+      screen (scr/buffer-screen 60 20)
+      entry-text #(get-in @(find-widget :entry root) [:props :text])]
+  (tui/attach! root screen)
+  (ui/mount root :window [app])
+  (tui/frame!)
+  (doseq [c (map int "hello")] (tui/press! c))
+  (check "typed text lands in the composer" "hello" (entry-text))
+  (tui/press! 1)    ; ctrl+a -> start
+  (tui/press! 11)   ; ctrl+k -> kill to end
+  (check "ctrl+k clears the composer and saves the kill" "" (entry-text))
+  (tui/press! 25)   ; ctrl+y -> yank
+  (check "ctrl+y yanks the killed text back" "hello" (entry-text)))
 
 ;; -- send while busy interrupts the running tool and stages the message ------
 (let [calls (atom 0)
