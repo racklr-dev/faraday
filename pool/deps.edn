@@ -5,8 +5,8 @@
 
         racklr-dev/jolt-microvm
         {:git/url "https://github.com/racklr-dev/jolt-microvm"
-         :git/sha "c45dc203ddfb55d8f3fc729321f06cc41b4e6ffa"}
+         :git/sha "08f0d82b8c0022603f0d27a86b9400f48f55be8b"}
 
         racklr-dev/jolt-oci
         {:git/url "https://github.com/racklr-dev/jolt-oci"
-         :git/sha "6f736ecd2cd472acb4ce44e2a7f2f911001d26a2"}}}
+         :git/sha "7b9874f3e0302b03e28713531e1ad73a796deef6"}}}
