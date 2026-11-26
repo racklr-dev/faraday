@@ -32,6 +32,8 @@
              :messages messages
              :temperature (or (:temperature cfg) 0)}
       effort (assoc :effort effort)
+      (:max-tokens cfg) (assoc :max_tokens (:max-tokens cfg))
+      (:logprobs cfg) (assoc :logprobs true :top_logprobs (or (:top-logprobs cfg) 20))
       tools (assoc :tools tools :tool-choice (or (:tool-choice cfg) "auto")))))
 
 (declare curl-http content->action)

@@ -21,6 +21,7 @@
             [faraday.harness.context :as ctx]
             [faraday.harness.dialog :as dialog]
             [faraday.harness.guard :as guard]
+            [faraday.harness.jev :as jev]
             [faraday.harness.llm :as llm]
             [faraday.harness.session :as session]
             [faraday.harness.settings :as settings]
@@ -1006,7 +1007,7 @@
   :interrupt! (fn)}. The terminal TUI renders :state; the web console can
   render and drive the same :state, so both clients see one conversation.
   interrupt! asks a running turn to stop at the next step boundary."
-  [{:keys [call exec system max-turns max-stall stores thread-id]}]
+  [{:keys [call exec system max-turns max-stall stores thread-id classify]}]
   (let [state (r/atom {:messages (or (when (and stores thread-id)
                                       (try (session/resume stores (deref-thread thread-id))
                                            (catch Exception _ nil)))
@@ -1028,7 +1029,25 @@
                                       :max-turns max-turns :max-stall max-stall
                                       :interrupt interrupt
                                       :goal-fn (when task-id (task-done-goal task-id))
-                                      :guard guard/verdict}
+                                      :guard (fn [tc entries]
+                                               (or (guard/verdict tc entries)
+                                                   (when classify
+                                                     (let [name (str (:name tc))
+                                                           text (cond
+                                                                  (contains? #{"run_shell" "shell" "exec"} name)
+                                                                  (str/join " " (map str (get-in tc [:args :argv])))
+                                                                  (re-matches #"run_[a-z0-9-]+" name)
+                                                                  (str (get-in tc [:args :code]))
+                                                                  :else nil)]
+                                                       (when text
+                                                         (when-let [p (classify text)]
+                                                           (cond
+                                                             (>= (:dangerous p) 0.5)
+                                                             (str "Blocked (flash): dangerous — " (format "%.0f%%" (* 100 (:dangerous p))) ".")
+                                                             (and (>= (:mutating p) 0.5) (not (guard/claimed? entries)))
+                                                             (str "Requires a claimed task (flash: mutating — " (format "%.0f%%" (* 100 (:mutating p))) ").")
+                                                             :else nil)))))))}
+
                                      state es))
                         (when (and stores thread-id)
                           (try (session/persist! stores (deref-thread thread-id) (:messages @state))
@@ -1638,6 +1657,10 @@
         call (or (:call opts)
                  (with-circuit-breaker breaker #(model-step @cfg strong % usage)))
         exec (or (:exec opts) host-exec)
+        ;; flash classifier is live only on the real model path; a test
+        ;; :call seam means a fake model, so stay hermetic (regex floor only)
+        classify (when-not (:call opts)
+                   (fn [text] (jev/probabilities @cfg text)))
         max-turns (or (:max-turns opts) 96)
         stores (:session opts)
         thread-id (:thread-id opts)
@@ -1658,7 +1681,7 @@
                   (:context @cfg) (into (:context @cfg)))
                 facts)
         sess (chat-session {:call call :exec exec :system system :max-turns max-turns
-                            :stores stores :thread-id thread-ref})
+                            :stores stores :thread-id thread-ref :classify classify})
         state (:state sess)
         interrupt! (:interrupt! sess)
         pending? (r/atom false)
