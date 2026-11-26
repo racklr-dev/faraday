@@ -87,6 +87,7 @@
     (let [state {:task "go" :transcript [{:role :user :content "hi"}] :turns 3}]
       (memory/checkpoint! mem "thr_c" state)
       (check "restore round-trips" state (memory/restore mem "thr_c"))
+      (check "list-threads names checkpointed threads" ["thr_c"] (memory/list-threads mem))
       (memory/checkpoint! mem "thr_c" (assoc state :turns 4))
       (check "checkpoint upserts" {:task "go" :transcript [{:role :user :content "hi"}] :turns 4}
              (memory/restore mem "thr_c"))

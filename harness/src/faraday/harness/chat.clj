@@ -1646,7 +1646,7 @@
             (filter seq
                     [(when branch (str branch))
                      (when thread-id
-                       (str "#" (subs (str thread-id) 0 (min 8 (count (str thread-id))))))
+                       (str "#" (session/short-thread-id thread-id)))
                      (when cwd (shorten-home cwd))
                      (usage-readout usage)
                      (ctx-readout ctx)
@@ -2470,7 +2470,15 @@
         root (.getCanonicalPath (java.io.File. (System/getProperty "user.dir")))
         proj-root (tools/find-root root)
         stores (delay (try (session/open root) (catch Exception _ nil)))
-        thread-id (or (:thread flags) (session/default-thread-id))
+        thread-id (if-let [given (:thread flags)]
+                    (do
+                      (when-not @stores
+                        (throw (ex-info "could not open the session store to resume a thread" {})))
+                      (or (session/resolve-thread @stores given)
+                          (throw (ex-info (str "no session matches thread id " (pr-str given)
+                                               "; pass the full id (printed on exit) or its trailing short form")
+                                          {}))))
+                    (session/default-thread-id))
         sandbox (when (= "sandbox" exec-mode)
                   (sandbox-exec-factory {:workspace (System/getProperty "user.dir")
                                          :mounts mounts
@@ -2556,8 +2564,16 @@
         ((requiring-resolve 'faraday.harness.console/run!)
          {:chat-opts opts :pool-ref pool-ref})
         (close)
-        (println "bye — resume with:")
-        (println (str "  faraday chat"
-                      (when (seq args) (str " " (str/join " " args)))
-                      " --thread " thread-id))
+        (let [resume-args (loop [as (seq args) acc []]
+                            (if-not as
+                              acc
+                              (let [a (first as)]
+                                (cond
+                                  (str/starts-with? a "--thread=") (recur (next as) acc)
+                                  (= a "--thread") (recur (nnext as) acc)
+                                  :else (recur (next as) (conj acc a))))))]
+          (println "bye — resume with:")
+          (println (str "  faraday chat"
+                        (when (seq resume-args) (str " " (str/join " " resume-args)))
+                        " --thread " (session/short-thread-id thread-id))))
         (shutdown-agents)))))

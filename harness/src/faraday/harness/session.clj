@@ -6,7 +6,8 @@
 ;; checkpoints the transcript under the thread-id; resume reads it back; close!
 ;; runs the post-session orchestrator so learnings become salient facts.
 (ns faraday.harness.session
-  (:require [faraday.ledger :as ledger]
+  (:require [clojure.string :as str]
+            [faraday.ledger :as ledger]
             [faraday.memo :as memo]
             [faraday.memory :as memory]))
 
@@ -25,6 +26,34 @@
   get a new conversation; pass --thread <id> (printed on exit) to resume one."
   []
   (str "chat-" (java.util.UUID/randomUUID)))
+
+(defn short-thread-id
+  "The trailing 8 chars of a thread id — the compact form the footer prints and
+  --thread accepts for resume. A full `chat-<uuid>` id is also accepted as-is;
+  this only shortens it for display."
+  [thread-id]
+  (let [t (str (or thread-id ""))]
+    (subs t (max 0 (- (count t) 8)))))
+
+(defn resolve-thread
+  "Resolve a full or short thread id to the full id. `id` may be the full
+  `chat-<uuid>`, or a short suffix (with an optional leading `#`, as the footer
+  prints). Returns the full id on a unique match, nil when nothing matches, and
+  throws when the short id is ambiguous."
+  [stores id]
+  (let [id (str/trim (str (or id "")))
+        id (if (str/starts-with? id "#") (subs id 1) id)]
+    (when (seq id)
+      (let [matches (filter #(str/ends-with? % id)
+                            (or (seq (memory/list-threads (:memory stores))) []))]
+        (cond
+          (empty? matches) nil
+          (= 1 (count matches)) (first matches)
+          :else (throw (ex-info (str "thread id " (pr-str id) " is ambiguous; it matches "
+                                     (str/join ", " (sort matches))
+                                     ". Use more of the id.")
+                                {:faraday.session/ambiguous-id true
+                                 :matches (vec (sort matches))})))))))
 
 (defn- entry->msg [thread-id idx e]
   {:v 1

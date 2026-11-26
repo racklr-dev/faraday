@@ -47,9 +47,9 @@
        (chat/ctx-readout {:estimated 24000 :floor 12000}))
 
 ;; -- the joined footer --------------------------------------------------------
-(check "footer-readout joins branch thread cwd usage ctx model"
-       "main  #abc12345  /tmp/proj  ↑1.2k(310c) ↓480  ctx 24k/64k 38%  deepseek-flash"
-       (chat/footer-readout {:branch "main" :thread-id "abc123456789" :cwd "/tmp/proj"
+(check "footer-readout shortens a full thread id to its trailing 8 chars"
+       "main  #567890ab  /tmp/proj  ↑1.2k(310c) ↓480  ctx 24k/64k 38%  deepseek-flash"
+       (chat/footer-readout {:branch "main" :thread-id "chat-5412f8b3-9c6d-4e0a-b7f1-1234567890ab" :cwd "/tmp/proj"
                              :usage {:prompt_tokens 1234 :completion_tokens 480 :cached-input-tokens 310}
                              :ctx {:estimated 24000 :budget 64000}
                              :model "deepseek-flash"}))

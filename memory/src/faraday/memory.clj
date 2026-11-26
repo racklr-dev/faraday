@@ -203,6 +203,14 @@
                               [thread-id]))]
     (when row (text->value (:state row)))))
 
+(defn list-threads
+  "All thread-ids with a durable checkpoint, sorted ascending. This is the
+  identity key for resume: a thread only becomes resumable once checkpointed."
+  [mem]
+  (mapv :thread_id
+        (sql/query (:conn mem)
+                   "select thread_id from checkpoints order by thread_id" [])))
+
 (defn drop-checkpoint!
   "Remove thread-id's checkpoint. Returns true if it was present."
   [mem thread-id]

@@ -36,6 +36,33 @@
 (check "history stays single copy after re-persist" 4 (count (s/history stores tid)))
 
 (check "default-thread-id is fresh per call" false (= (s/default-thread-id) (s/default-thread-id)))
+(check "short-thread-id keeps the trailing 8 chars"
+       "567890ab"
+       (s/short-thread-id "chat-5412f8b3-9c6d-4e0a-b7f1-1234567890ab"))
+(check "short-thread-id of a short id is itself"
+       "567890ab"
+       (s/short-thread-id "567890ab"))
+
+;; -- resolve a full or short thread id ---------------------------------------
+(let [tid-a "chat-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+      tid-b "chat-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+      amb-1 "chat-cccccccc-cccc-cccc-cccc-1234abcd"
+      amb-2 "chat-dddddddd-dddd-dddd-dddd-1234abcd"]
+  (s/persist! stores tid-a msgs)
+  (s/persist! stores tid-b msgs)
+  (s/persist! stores amb-1 msgs)
+  (s/persist! stores amb-2 msgs)
+  (check "resolve-thread full id is itself" tid-a (s/resolve-thread stores tid-a))
+  (check "resolve-thread trailing short form" tid-a (s/resolve-thread stores "aaaaaaaa"))
+  (check "resolve-thread accepts the footer's leading #" tid-a (s/resolve-thread stores "#aaaaaaaa"))
+  (check "resolve-thread empty id is nil" nil (s/resolve-thread stores ""))
+  (check "resolve-thread no match is nil" nil (s/resolve-thread stores "zzzzzzzz"))
+  (let [thrown (try (s/resolve-thread stores "abcd")
+                    (catch clojure.lang.ExceptionInfo e e))]
+    (check-true "resolve-thread ambiguous id throws" (instance? clojure.lang.ExceptionInfo thrown))
+    (check "ambiguous message names the matches"
+           #{amb-1 amb-2}
+           (set (:matches (ex-data thrown))))))
 
 (let [learnings (s/close! stores tid)]
   (check-true "extract records message-count" (contains? learnings :message-count))
