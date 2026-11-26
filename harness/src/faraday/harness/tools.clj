@@ -46,7 +46,8 @@
          (str "  " (str/join " " cmd)))))
 
 (def read-only-tools
-  #{"board" "task_list" "task_show" "scope_list" "hook_list" "hooks_for" "pool_stats"})
+  #{"board" "task_list" "task_show" "scope_list" "hook_list" "hooks_for" "pool_stats" "read_file"
+    "list_tools" "cells" "cell_show" "loop_get"})
 
 (defn dispatch
   "Run a chat tool. `hd` is the harness DB, `root` the project root, `pool-handle`
@@ -164,6 +165,81 @@
     (spit path (str code))
     {:argv (into (vec prefix) [path]) :path path}))
 
+;; -- structured file tools (read_file / edit_file / write_file) --------------
+;; The chat router calls these host-side instead of forcing the model to build
+;; sed/grep pipelines through run_shell. Each returns the run_shell result
+;; shape plus :progress?.
+
+(defn- file-path
+  "Resolve a tool :path against the project root; a path starting with / is
+  absolute and passes through."
+  [root path]
+  (let [p (str path)]
+    (if (str/starts-with? p "/") p (str root "/" p))))
+
+(defn- count-occurrences
+  "Literal count of needle in hay (no regex), for edit_file uniqueness."
+  [hay needle]
+  (let [hay (str hay) needle (str needle)]
+    (if (empty? needle)
+      0
+      (loop [i 0 n 0]
+        (let [j (.indexOf hay needle i)]
+          (if (neg? j) n (recur (+ j (count needle)) (inc n))))))))
+
+(defn read-file
+  "read_file: return the file at :path, or its 1-based inclusive [:start :end]
+  line range (whole file when omitted). Read-only, so :progress? is false."
+  [root args]
+  (try
+    (let [path (file-path root (:path args))
+          f (java.io.File. path)]
+      (if-not (.isFile f)
+        (assoc (err (str "read_file: " path " does not exist")) :progress? false)
+        (let [lines (vec (str/split-lines (slurp f)))
+              n (count lines)
+              start (if (nil? (:start args)) 1 (max 1 (long (:start args))))
+              end (if (nil? (:end args)) n (min n (long (:end args))))]
+          (if (> start end)
+            (assoc (err (str "read_file: start " start " > end " end)) :progress? false)
+            (assoc (ok (str/join "\n" (subvec lines (dec start) end))) :progress? false)))))
+    (catch Exception e
+      (assoc (err (str "read_file failed: " (or (ex-message e) "?"))) :progress? false))))
+
+(defn edit-file
+  "edit_file: replace the one exact occurrence of :old in the file at :path
+  with :new. Errors when :old is absent or matches more than once."
+  [root args]
+  (try
+    (let [path (file-path root (:path args))
+          f (java.io.File. path)
+          old (str (:old args))
+          new (str (:new args))]
+      (if-not (.isFile f)
+        (assoc (err (str "edit_file: " path " does not exist")) :progress? false)
+        (let [content (slurp f)
+              n (count-occurrences content old)]
+          (cond
+            (zero? n) (assoc (err (str "edit_file: old text not found in " path)) :progress? false)
+            (> n 1) (assoc (err (str "edit_file: old text matches " n " times — make it more specific")) :progress? false)
+            :else (do (spit f (.replace content old new))
+                      (assoc (ok (str "replaced 1 occurrence in " path)) :progress? true))))))
+    (catch Exception e
+      (assoc (err (str "edit_file failed: " (or (ex-message e) "?"))) :progress? false))))
+
+(defn write-file
+  "write_file: write :content to the file at :path, creating parent directories."
+  [root args]
+  (try
+    (let [path (file-path root (:path args))
+          f (java.io.File. path)
+          content (str (:content args))]
+      (when-let [parent (.getParentFile f)] (.mkdirs parent))
+      (spit f content)
+      (assoc (ok (str "wrote " (.length f) " bytes to " path)) :progress? true))
+    (catch Exception e
+      (assoc (err (str "write_file failed: " (or (ex-message e) "?"))) :progress? false))))
+
 (def tool-specs
   "The tools: name, one-line description, the prompt args shape, and the JSON
   schema for OpenAI-style native function calling."
@@ -175,6 +251,50 @@
     :desc "evaluate jolt (Clojure) code in the sandbox; returns what it prints"
     :args "{:code \"(println (range 5))\"}"
     :parameters (req {:code {:type "string"}} ["code"])}
+   {:name "read_file"
+    :desc "read a file, or a line range, from the project — use for targeted reads instead of sed -n"
+    :args "{:path rel/or/abs :start 10 :end 30}"
+    :parameters (req {:path {:type "string"} :start {:type "integer"} :end {:type "integer"}} ["path"])}
+   {:name "edit_file"
+    :desc "replace one exact string in a file with another — errors unless :old matches exactly once (prefer this over sed -i)"
+    :args "{:path ... :old exact-existing-text :new replacement}"
+    :parameters (req {:path {:type "string"} :old {:type "string"} :new {:type "string"}} ["path" "old" "new"])}
+   {:name "write_file"
+    :desc "write the whole file at :path with :content (creates parent dirs, overwrites)"
+    :args "{:path ... :content ...}"
+    :parameters (req {:path {:type "string"} :content {:type "string"}} ["path" "content"])}
+   {:name "list_tools"
+    :desc "list every available tool with its args shape"
+    :args "{}"
+    :parameters (obj {})}
+   {:name "cells"
+    :desc "list the standing Context cells (note lines) that ride every request"
+    :args "{}"
+    :parameters (obj {})}
+   {:name "cell_add"
+    :desc "add a standing Context cell: a one-line :note + the full :body text (survives restarts)"
+    :args "{:note one-line-summary :body full-text}"
+    :parameters (req {:note {:type "string"} :body {:type "string"}} ["note"])}
+   {:name "cell_show"
+    :desc "show one Context cell's full body by seq"
+    :args "{:id 3}"
+    :parameters (req {:id {:type "integer"}} ["id"])}
+   {:name "cell_drop"
+    :desc "drop Context cells by seq (keep the rest)"
+    :args "{:ids [2 3]}"
+    :parameters (req {:ids {:type "array" :items {:type "integer"}}} ["ids"])}
+   {:name "cell_keep"
+    :desc "keep only these Context cells by seq (drop the rest)"
+    :args "{:ids [1 2]}"
+    :parameters (req {:ids {:type "array" :items {:type "integer"}}} ["ids"])}
+   {:name "loop_get"
+    :desc "show the loop manifest (the editable working rules + turn budget)"
+    :args "{}"
+    :parameters (obj {})}
+   {:name "loop_set"
+    :desc "rewrite the editable loop surface: :rules [strings] and/or :turn-budget int"
+    :args "{:rules [\"...\"] :turn-budget 96}"
+    :parameters (obj {:rules {:type "array" :items {:type "string"}} :turn-budget {:type "integer"}})}
    {:name "pool_stats"
     :desc "warm VM pool stats"
     :args "{}"
@@ -227,6 +347,14 @@
           {:type "function"
            :function {:name name :description desc :parameters parameters}})
         tool-specs))
+
+(declare tool-prompt)
+
+(defn list-tools
+  "list_tools: return the tool catalog as a run_shell-shaped result, so the model
+  can always enumerate its tools deterministically instead of recalling the prompt."
+  []
+  {:status :ok :exit 0 :stdout (tool-prompt) :stderr ""})
 
 (defn tool-prompt
   "The tool list rendered into the agentic system prompt."

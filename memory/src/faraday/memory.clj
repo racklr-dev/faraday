@@ -146,6 +146,26 @@
                      "select fact_key, value, tier from facts where thread_id = ? order by fact_key"
                      [thread-id])))
 
+(defn fact-keys
+  "The fact-keys stored for thread-id, sorted ascending (as keywords)."
+  [mem thread-id]
+  (mapv str->k
+        (map :fact_key
+             (sql/query (:conn mem)
+                        "select fact_key from facts where thread_id = ? order by fact_key"
+                        [thread-id]))))
+
+(defn delete-fact!
+  "Remove a fact-key for thread-id. Returns true when it was present."
+  [mem thread-id fact-key]
+  (let [conn (:conn mem)
+        k (k->str fact-key)
+        had (boolean (seq (sql/query conn
+                                     "select 1 from facts where thread_id = ? and fact_key = ?"
+                                     [thread-id k])))]
+    (sql/query conn "delete from facts where thread_id = ? and fact_key = ?" [thread-id k])
+    had))
+
 ;; -- FTS5 search over ledger + memo ------------------------------------------
 
 (defn index-thread!

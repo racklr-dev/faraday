@@ -76,4 +76,45 @@
   (check-true "openai tools include run_jolt"
               (boolean (some #(= "run_jolt" (get-in % [:function :name])) ots))))
 
+;; -- structured file tools (read_file / edit_file / write_file) --------------
+(let [nl (str (char 10))]
+  (let [f "notes.txt"
+        _ (spit (str root "/" f) (str "alpha" nl "beta" nl "gamma" nl "delta" nl))]
+    (check "read_file whole file" (str "alpha" nl "beta" nl "gamma" nl "delta") (:stdout (tools/read-file root {:path f})))
+    (check "read_file line range" (str "beta" nl "gamma") (:stdout (tools/read-file root {:path f :start 2 :end 3})))
+    (check "read_file read-only progress" false (:progress? (tools/read-file root {:path f})))
+    (check "read_file missing errors" :error (:status (tools/read-file root {:path "nope.txt"})))))
+
+(let [f "edit.txt"
+      _ (spit (str root "/" f) "hello world")]
+  (let [r (tools/edit-file root {:path f :old "world" :new "there"})]
+    (check "edit_file ok" :ok (:status r))
+    (check "edit_file content" "hello there" (slurp (str root "/" f)))
+    (check "edit_file progress" true (:progress? r))))
+
+(let [f "dup.txt"
+      _ (spit (str root "/" f) "x x x")]
+  (check "edit_file non-unique errors" :error (:status (tools/edit-file root {:path f :old "x" :new "y"}))))
+
+(let [f "absent.txt"
+      _ (spit (str root "/" f) "abc")]
+  (check "edit_file missing old errors" :error (:status (tools/edit-file root {:path f :old "zzz" :new "y"}))))
+
+(let [r (tools/write-file root {:path "sub/dir/out.txt" :content "payload"})]
+  (check "write_file ok" :ok (:status r))
+  (check-true "write_file creates parents" (.isFile (java.io.File. (str root "/sub/dir/out.txt"))))
+  (check "write_file content" "payload" (slurp (str root "/sub/dir/out.txt"))))
+
+(check-true "read_file is read-only" (contains? tools/read-only-tools "read_file"))
+
+(let [ots (tools/openai-tools)]
+  (check-true "openai tools include read_file" (boolean (some #(= "read_file" (get-in % [:function :name])) ots)))
+  (check-true "openai tools include edit_file" (boolean (some #(= "edit_file" (get-in % [:function :name])) ots)))
+  (check-true "openai tools include write_file" (boolean (some #(= "write_file" (get-in % [:function :name])) ots))))
+
+(let [tp (tools/tool-prompt)]
+  (check-true "prompt lists read_file" (str/includes? tp "read_file"))
+  (check-true "prompt lists edit_file" (str/includes? tp "edit_file"))
+  (check-true "prompt lists write_file" (str/includes? tp "write_file")))
+
 (println "ALL TOOLS TESTS PASSED")

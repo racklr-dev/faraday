@@ -194,7 +194,7 @@
   (check "wrap-width: headless fallback" 92 (ww {} nil)))
 
 (let [msgs (chat/build-messages "S" (vec (repeat 45 {:role :user :text "hi"})) :context-budget 40)]
-  (check "folding prepends a summary" true (str/includes? (:content (second msgs)) "earlier context"))
+  (check "folding prepends a summary" true (str/includes? (:content (second msgs)) "so far"))
   (check "folding caps the transcript" 42 (count msgs)))
 
 ;; -- the component, headless -----------------------------------------------------

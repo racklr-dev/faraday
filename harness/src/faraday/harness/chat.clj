@@ -26,6 +26,8 @@
             [faraday.harness.session :as session]
             [faraday.harness.settings :as settings]
             [faraday.harness.tools :as tools]
+            [faraday.harness.cells :as cells]
+            [faraday.harness.loop :as loop]
             [faraday.themes :as themes]
             [glimmer.core :as ui]
             [glimmer.ratom :as r]
@@ -88,17 +90,22 @@
 (def agentic-system
   (str "You are faraday, the terminal work agent for this project. The operator types a work order; you carry it out end-to-end with tools, then answer with what you did and what you verified.\n"
        "\n"
-       "Tools (each reply is exactly one EDN map, nothing else):\n"
+       "Tools (call them by name via function calling; each reply is one tool call, or a final answer):\n"
        (tools/tool-prompt)
        "\n"
        (tools/language-prompt)
        "\n"
-       "Working rules:\n"
-       "- Treat the user message as the task. Terse or ambiguous? Make the smallest reasonable assumption and start; ask only when the choice changes the work.\n"
-       "- Plan then edit: name the files and changes in one line, then execute — don't keep reading once you have enough.\n"
-       "- Read before you change; prefer grep -n / sed -n over whole-file dumps; never repeat a failed command unchanged.\n"
-       "- In run_shell the project directory is mounted at its own host path, so the paths in Context work verbatim. Board/scope/hook tools only work when Context says the taskboard is ready.\n"
-       "- When the task is to show or read a file, answer with the file's full text verbatim — never a summary, never 'see the tool output above'. Paste it raw, no fence.\n"
+       "Reply shape: call a tool by name with its args (native function calling). To finish, reply with plain text, or an EDN map {:done \"...\"}. Never wrap a tool call inside another map.\n"
+       "\n"
+       "Memory & persistence:\n"
+       "- You persist across sessions, not only within one. Facts from past sessions appear under 'You remember these facts'; the taskboard, Context cells, and repo files are durable stores.\n"
+       "- To remember something for later, write it down: add a Context cell (cell_add), put it on the taskboard (task_add), or write a file. Never answer 'I have no memory across conversations' — you do, through these stores.\n"
+       "- To see your tools, use list_tools (or read the Tools list above).\n"
+       "\n"
+       "Execution discipline:\n"
+       "- A turn must END with the work DONE — files edited, tests run, task closed. Never stop at a plan, a list of what you still need to do, or a 'Progress made / Remaining' report; those are not answers. Keep making tool calls until the change is actually applied and verified.\n"
+       "- Do not re-read a file you have already read unless a prior edit or command changed it. If you know the edit, make it now.\n"
+       "- Do not restate the remaining steps in your answer; carry them out. If you are truly out of ideas, say so plainly and stop.\n"
        "\n"
        "Answer with {:done \"...\"} (or plain text for a short answer). Report concretely: files changed or commands run, and what you verified. When the task was to show/read a file, the answer is the file's contents in full. No preamble, no filler."))
 
@@ -344,13 +351,13 @@
   [es]
   (let [roles (frequencies (map :role es))
         errors (seq (keep :error es))
-        last-user (last (filter #(= :user (:role %)) es))]
-    (str "(earlier context: " (count es) " entries, "
+        first-user (first (filter #(= :user (:role %)) es))]
+    (str "(so far: " (count es) " entries, "
          (or (:tool-call roles) 0) " tool calls, "
          (or (:tool-result roles) 0) " tool results"
          (when errors (str ", " (count errors) " errors"))
-         (when last-user
-           (str "; last task: " (subs (str (:text last-user)) 0 (min 80 (count (str (:text last-user)))))))
+         (when first-user
+           (str "; original task: " (subs (str (:text first-user)) 0 (min 80 (count (str (:text first-user)))))))
          ")")))
 
 (defn build-messages
@@ -462,9 +469,7 @@
   [argv]
   (let [cmd (str/join " " (map str argv))]
     (when (re-find dump-guard-re cmd)
-      (str "Blocked: this would dump a whole file and flood the context. "
-           "Reads are capped at ~80 lines. Use `grep -n PATTERN file` to find the line, "
-           "then `sed -n A,Bp file` (keep B-A <= 80) to read just that part."))))
+      (str "Don't cat/head a whole file — it floods the context. Use the read_file tool (read_file {:path \"rel/path\"}; add :start/:end for a line range on a large file)."))))
 
 (defn host-exec
   "The default tool executor: run argv on the host in faraday's cwd, or evaluate
@@ -750,9 +755,13 @@
   Safe to run on a worker thread (only ratom swaps, no widget touches)."
   [opts state entries]
   (let [{:keys [call exec system max-turns max-stall goal-fn context-budget guard]} opts
+        ;; :system may be a 0-arity fn so standing cells/loop rules are re-read
+        ;; each user turn (they ride every request); normalize to a string here.
+        system (if (ifn? system) (system) system)
         interrupt (or *interrupt* (:interrupt opts) (atom false))
         max-stall (or max-stall 3)
         context-budget (or context-budget 40)
+        start-count (count entries)
         run-one (fn [name args es]
                   (let [mk-call (fn [] {:role :tool-call :name name :args args})
                         mk-result (fn [res]
@@ -795,9 +804,36 @@
                          (<= left 4)
                          "A few tool turns left: start editing now; only read a file if one targeted read unblocks the edit."
                          :else nil))
+        error-note (fn [es]
+                     (let [tail (vec (take-last 3 es))]
+                       (when (and (= 3 (count tail))
+                                  (every? #(and (= :tool-result (:role %))
+                                                (= :error (:status %)))
+                                          tail))
+                         (str "Your last 3 tool calls all errored"
+                              (when-let [codes (seq (keep :exit tail))]
+                                (str " (exit " (str/join ", " codes) ")"))
+                              ". Stop and reconsider: prefer read_file/edit_file over sed/grep, each argv element is already one argument (do not wrap in sh -c unless necessary), and run one simple command to verify before the next attempt."))))
+        progress-report? (fn [text]
+                           (boolean
+                            (and (string? text)
+                                 (re-find #"(?i)(not finished|unfinished|not done|not yet|remaining|progress made|still need|to do:)" (str text)))))
+        terminal-answer! (fn [es text]
+                           (let [answer {:role :assistant :text text}]
+                             (swap! state update :messages conj answer)
+                             (if (progress-report? text)
+                               {:cont (conj es
+                                            answer
+                                            {:role :user
+                                             :text "That is a status report, not a finished answer. Keep working: make the edits you listed now, verify them, and only stop when they are actually done — do not re-read files you have already read."})
+                                :reported? true}
+                               :done)))
         step! (fn [es left]
-                (let [msgs (build-messages system es)
+                (let [msgs (build-messages system es :context-budget (* 3 context-budget))
                       msgs (if-let [note (budget-note left)]
+                             (conj msgs {:role "user" :content note})
+                             msgs)
+                      msgs (if-let [note (error-note es)]
                              (conj msgs {:role "user" :content note})
                              msgs)
                       resp (call msgs)
@@ -822,25 +858,27 @@
                     (and action (:done action))
                     (let [d (:done action)
                           text (if (string? d) d (pr-str d))]
-                      (swap! state update :messages conj {:role :assistant :text text})
-                      :done)
+                      (terminal-answer! es text))
 
-                    ;; plain text answer (no action map): render and stop
+                    ;; plain text answer (no action map)
                     :else
-                    (do
-                      (swap! state update :messages conj {:role :assistant :text (str (or resp ""))})
-                      :done))))]
+                    (terminal-answer! es (str (or resp ""))))))]
     (loop [left (or max-turns 96)
            stall 0
+           reported 0
            es entries]
       (cond
         (and goal-fn (goal-fn {:entries es :state @state}))
         (force-final-answer! call system es state
           "The goal is met — give your final answer now.")
 
-        (> (count es) (* 3 context-budget))
+        (>= reported 3)
         (force-final-answer! call system es state
-          "Your context is full — give your best final answer now.")
+          "You have reported progress three times without finishing — do the actual work now, or state plainly what is blocking you.")
+
+        (> (- (count es) start-count) (* 3 context-budget))
+        (force-final-answer! call system es state
+          "You've used most of your tool turns — give your best final answer now, and say plainly if it is unfinished.")
 
         (zero? left)
         (force-final-answer! call system es state
@@ -880,6 +918,7 @@
                   (swap! state assoc :busy? false :error nil))
               (recur (dec left)
                      (if (:progress? outcome) 0 (inc stall))
+                     (if (:reported? outcome) (inc reported) 0)
                      (:cont outcome)))
             :else            (swap! state assoc :busy? false)))))))
 
@@ -1562,12 +1601,20 @@
   "The chat system prompt: `base` (the tool contract) plus the operator's
   injected context lines and remembered facts. Pure; chat-app calls it, tests
   pin it."
-  [base context-lines facts]
-  (cond-> base
-    (seq context-lines)
-    (str "\n\nContext:\n" (str/join "\n" context-lines))
-    (seq facts)
-    (str "\n\nYou remember these facts from earlier sessions:\n" (pr-str facts))))
+  ([base context-lines facts]
+   (system-with-context base context-lines facts nil nil))
+  ([base context-lines facts cells loop-lines]
+   (cond-> base
+     (seq context-lines)
+     (str "\n\nContext:\n" (str/join "\n" context-lines))
+     (seq cells)
+     (str "\n\nContext cells (standing notes that ride every request; cell_show N expands, cell_add/cell_drop/cell_keep edit):\n"
+          (str/join "\n" cells))
+     (seq loop-lines)
+     (str "\n\nLoop rules (editable via loop_get/loop_set):\n"
+          (str/join "\n" loop-lines))
+     (seq facts)
+     (str "\n\nYou remember these facts from earlier sessions:\n" (pr-str facts)))))
 
   (defn- transcript-view
   "The transcript vbox hiccup for `messages`. `thinking` is the live reasoning
@@ -1754,14 +1801,18 @@
         board-ready? (boolean (and board harness))
         facts (when (and stores thread-id)
                 (try (session/salient stores thread-id) (catch Exception _ nil)))
-        system (system-with-context
-                (or (:system opts) agentic-system)
-                (cond-> []
-                  (:boot-context opts) (into (:boot-context opts))
-                  (:sandbox-context opts) (conj (:sandbox-context opts))
-                  (:context @cfg) (into (:context @cfg)))
-                facts)
-        sess (chat-session {:call call :exec exec :system system :max-turns max-turns
+        system-fn (fn []
+                    (system-with-context
+                     (or (:system opts) agentic-system)
+                     (cond-> []
+                       (:boot-context opts) (into (:boot-context opts))
+                       (:sandbox-context opts) (conj (:sandbox-context opts))
+                       (:context @cfg) (into (:context @cfg)))
+                     facts
+                     (cells/cells-lines (cells/read-cells proj-root))
+                     (loop/loop-lines (loop/read-loop proj-root))))
+        sess (chat-session {:call call :exec exec :system system-fn
+                            :max-turns (or max-turns (:turn-budget (loop/read-loop proj-root)) 96)
                             :stores stores :thread-id thread-ref :classify classify})
         state (:state sess)
         interrupt! (:interrupt! sess)
@@ -2354,7 +2405,7 @@
             _ (when-not (and (identical? messages (:msgs @ctx-cache))
                              (identical? ccfg (:cfg @ctx-cache)))
                 (reset! ctx-cache {:msgs messages :cfg ccfg
-                                   :readout (ctx/context-estimate ccfg (build-messages system messages))}))
+                                   :readout (ctx/context-estimate ccfg (build-messages (system-fn) messages))}))
             ctx-est (:readout @ctx-cache)]
         [:vbox {:spacing 0 :padding [0 1 0 1]
                 :bg (themes/color :canvas)
@@ -2595,10 +2646,25 @@
                        :tasks active-tasks})
         pool-ref (atom nil)
         exec (fn [name args]
-               (if (or (contains? #{"run_shell" "shell" "exec"} name)
-                       (tools/run-code-tool? name))
+               (cond
+                 (or (contains? #{"run_shell" "shell" "exec"} name)
+                     (tools/run-code-tool? name))
                  (shell-exec name args)
-                 (tools/dispatch @hd proj-root @pool-ref name args)))
+
+                 (= "cells" name) (cells/list-tool proj-root args)
+                 (= "cell_add" name) (cells/add-tool proj-root args)
+                 (= "cell_show" name) (cells/show-tool proj-root args)
+                 (= "cell_drop" name) (cells/drop-tool proj-root args)
+                 (= "cell_keep" name) (cells/keep-tool proj-root args)
+                 (= "loop_get" name) (loop/get-tool proj-root args)
+                 (= "loop_set" name) (loop/set-tool proj-root args)
+
+                 (= "read_file" name) (tools/read-file proj-root args)
+                 (= "edit_file" name) (tools/edit-file proj-root args)
+                 (= "write_file" name) (tools/write-file proj-root args)
+                 (= "list_tools" name) (tools/list-tools)
+
+                 :else (tools/dispatch @hd proj-root @pool-ref name args)))
         opts (cond-> {:exec exec :session @stores :thread-id thread-id
                       :cwd root :proj-root proj-root :harness hd :board board
                       :boot-context boot-context}

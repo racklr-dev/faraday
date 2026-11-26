@@ -128,4 +128,23 @@
     (check "on-delta saw the running thinking text"
            ["think"] @deltas)))
 
+;; -- content->action: non-canonical tool-call formats models actually emit ----
+(check "content->action reads DSML with a string attr on parameter"
+       {:tool-call {:name "run_shell" :args {:argv ["ls" "-la"]}}}
+       (llm/content->action
+        "<｜DSML｜ calls>\n<｜DSML｜ invoke name=\"run_shell\">\n<｜DSML｜ parameter name=\"argv\" string=\"true\">[\"ls\", \"-la\"]</｜DSML｜ parameter>\n</｜DSML｜ invoke>\n</｜DSML｜ calls>"))
+
+(check "content->action reads OpenAI-style XML tool_calls"
+       {:tool-call {:name "run_shell" :args {:argv ["head" "-n" "5" "README.md"]}}}
+       (llm/content->action
+        "<tool_calls>\n<invoke name=\"run_shell\">\n<parameter name=\"argv\">[\"head\", \"-n\", \"5\", \"README.md\"]</parameter>\n</invoke>\n</tool_calls>"))
+
+(check "content->action reads a bare tool-name key as args"
+       {:tool-call {:name "run_shell" :args {:argv ["ls" "-la"]}}}
+       (llm/content->action "{:run_shell {:argv [\"ls\" \"-la\"]}}"))
+
+(check "content->action still reads the canonical tool-call EDN"
+       {:tool-call {:name "run_shell" :args {:argv ["ls"]}}}
+       (llm/content->action (pr-str {:tool-call {:name "run_shell" :args {:argv ["ls"]}}})))
+
 (println "ALL LLM TESTS PASSED")

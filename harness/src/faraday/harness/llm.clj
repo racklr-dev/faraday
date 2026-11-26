@@ -207,9 +207,15 @@
         action (cond
                  tcs
                  (let [calls (mapv (fn [tc]
-                                     {:name (get-in tc [:function :name])
-                                      :args (try (json/read-str (get-in tc [:function :arguments]) :key-fn keyword)
-                                                 (catch Exception _ {}))})
+                                     (let [nm (get-in tc [:function :name])
+                                           args (try (json/read-str (get-in tc [:function :arguments]) :key-fn keyword)
+                                                     (catch Exception _ {}))]
+                                       (if (and (contains? #{"tool_call" "tool-call"} (str nm))
+                                                (map? args)
+                                                (or (contains? args :name) (contains? args :tool)))
+                                         {:name (str (or (:name args) (:tool args)))
+                                          :args (or (:args args) (:arguments args) {})}
+                                         {:name nm :args args})))
                                    tcs)]
                    (if (= 1 (count calls)) {:tool-call (first calls)} {:tool-calls calls}))
 
@@ -288,14 +294,17 @@
   (let [s (str/trim s)]
     (try (edn/read-string s) (catch Exception _ s))))
 
-(defn- dsml-tool-calls
-  "Parse DeepSeek DSML tool calls into [{:name :args} ...]. Handles both
-  self-closing <｜DSML｜invoke name=\"x\" /> and open blocks with nested
-  <｜DSML｜parameter name=\"k\">v</｜DSML｜parameter> children."
+(defn- markup-tool-calls
+  "Parse tool calls emitted as XML-ish markup into [{:name :args} ...]. Both
+  DeepSeek DSML (<｜DSML｜ invoke ...>) and OpenAI-style XML (<invoke ...> /
+  <parameter ...>) share the invoke/parameter structure and differ only in the
+  DSML tag prefix. Handles self-closing <invoke name=\"x\" />, open invoke blocks
+  with nested <parameter name=\"k\">v</parameter> children, and extra attributes
+  on either tag (e.g. string=\"true\")."
   [content]
-  (let [self-re #"<｜DSML｜\s*invoke\s+name=\"([^\"]+)\"\s*/>"
-        open-re #"(?s)<｜DSML｜\s*invoke\s+name=\"([^\"]+)\"\s*>(.*?)</｜DSML｜\s*invoke\s*>"
-        param-re #"(?s)<｜DSML｜\s*parameter\s+name=\"([^\"]+)\"\s*>(.*?)</｜DSML｜\s*parameter\s*>"
+  (let [self-re #"<\s*(?:｜DSML｜\s*)?invoke\s+name=\"([^\"]+)\"[^>]*/>"
+        open-re #"(?s)<\s*(?:｜DSML｜\s*)?invoke\s+name=\"([^\"]+)\"[^>]*>(.*?)</\s*(?:｜DSML｜\s*)?invoke\s*>"
+        param-re #"(?s)<\s*(?:｜DSML｜\s*)?parameter\s+name=\"([^\"]+)\"[^>]*>(.*?)</\s*(?:｜DSML｜\s*)?parameter\s*"
         selfs (map (fn [[_ n]] {:name n :args {}}) (re-seq self-re content))
         opens (map (fn [[_ n body]]
                      {:name n
@@ -323,12 +332,17 @@
                               (when (or (string? (:tool-call x)) (keyword? (:tool-call x)))
                                 (:tool-call x))))
           args (or (:args x) (:arguments x) {})]
-      (when name {:name name :args (if (map? args) args {})}))))
+      (if (and (#{"tool_call" "tool-call"} (str name))
+               (map? args)
+               (or (:name args) (:tool args)))
+        (normalize-tool-call args)
+        (when name {:name name :args (if (map? args) args {})})))))
 
 (defn- normalize-action
   "Coerce a parsed EDN map into the canonical action contract: {:tool-call ..}
-  for one call, {:tool-calls [..]} for several, or {:done ..}. Returns nil for
-  a map that is not an action."
+  for one call, {:tool-calls [..]} for several, or {:done ..}. Also accepts a
+  bare tool-name key whose value is the args map ({:run_shell {:argv [...]}}).
+  Returns nil for a map that is not an action."
   [a]
   (when (map? a)
     (cond
@@ -336,7 +350,12 @@
       (:tool-calls a) {:tool-calls (vec (keep normalize-tool-call (:tool-calls a)))}
       (:tool-call a) (when-let [tc (normalize-tool-call (:tool-call a))] {:tool-call tc})
       (:tool a) (when-let [tc (normalize-tool-call {:name (:tool a) :args (:args a)})] {:tool-call tc})
-      :else nil)))
+      :else
+      (when (= 1 (count a))
+        (let [[k v] (first a)]
+          (when (map? v)
+            (when-let [tc (normalize-tool-call {:name k :args v})]
+              {:tool-call tc})))))))
 
 (defn- extract-edn
   "The EDN to read out of possibly-noisy content: the inside of an
@@ -348,17 +367,20 @@
 
 (defn content->action
   "Parse an assistant content string into a canonical action map. Accepts, in
-  order: DeepSeek DSML (<｜DSML｜invoke ...>), EDN inside <edn>...</edn> or a bare
-  EDN map (possibly surrounded by prose), with lenient aliases {:tool name},
-  {:tool-call name}, and a bare name. Throws on blank or unreadable content,
-  which faraday.agent.model treats as a failed call and repairs/escalates past."
+  order: DeepSeek DSML (<｜DSML｜invoke ...>) or OpenAI-style XML
+  (<invoke ...>/<parameter ...>), EDN inside <edn>...</edn> or a bare EDN map
+  (possibly surrounded by prose), with lenient aliases {:tool name},
+  {:tool-call name}, a bare tool-name key, and a bare name. Throws on blank or
+  unreadable content, which faraday.agent.model treats as a failed call and
+  repairs/escalates past."
   [content]
   (let [content (strip-fences content)]
     (when (str/blank? content)
       (throw (ex-info "llm returned empty content" {})))
     (cond
-      (str/includes? content "｜DSML｜")
-      (let [calls (dsml-tool-calls content)]
+      (or (str/includes? content "｜DSML｜")
+          (re-find #"<\s*invoke\b|<\s*parameter\b" content))
+      (let [calls (markup-tool-calls content)]
         (when (seq calls)
           (if (= 1 (count calls))
             {:tool-call (first calls)}

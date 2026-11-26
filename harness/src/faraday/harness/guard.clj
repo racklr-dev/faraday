@@ -64,6 +64,13 @@
 (defn- command [argv]
   (str/join " " (map str argv)))
 
+(def no-claimed-task-hint
+  "The remedy the model sees whenever a mutation is refused for want of a
+  claimed task: claim a related task, or create one when none exists."
+  "Claim a related task with task_set_status <id> in_progress; if no related
+  task exists, create one first (task_add {:title ... :scope ... :body ...
+  :priority \"normal\"}), then claim it in_progress.")
+
 (defn claimed?
   "True when the transcript shows a task moved to in_progress."
   [entries]
@@ -84,7 +91,7 @@
          (case kind
            :reject (str "Blocked: " why ".")
            :mutating (when-not claimed?
-                       (str why " — but no task is claimed; claim one first (task_set_status <id> in_progress)."))
+                       (str why " — no task claimed. " no-claimed-task-hint))
            nil)))
      shell-rules)))
 
@@ -96,9 +103,13 @@
     (cond
       (= "task_set_status" name)
       (when (and (not claimed?) (not= "in_progress" (:status args)))
-        "No task is claimed — claim one first (task_set_status <id> in_progress) before changing task status.")
+        (str "No task is claimed. " no-claimed-task-hint))
 
       (contains? #{"run_shell" "shell" "exec"} name)
       (shell-refusal (:argv args) claimed?)
+
+      (contains? #{"edit_file" "write_file"} name)
+      (when-not claimed?
+        (str "File edits require a claimed task. " no-claimed-task-hint))
 
       :else nil)))
