@@ -108,4 +108,24 @@
        {:cached-input-tokens 40}
        (llm/cache-usage {:prompt_cache_hit_tokens 40 :prompt_cache_miss_tokens 80}))
 
+;; -- streaming: deltas reassemble to the same result as the plain body --------
+(let [content (pr-str {:done "ok"})
+      body (json/write-str
+            {:choices [{:index 0 :message {:role "assistant" :content content}}]
+             :usage {:prompt_tokens 3 :completion_tokens 2 :total_tokens 5}})
+      deltas (atom [])]
+  (with-redefs [llm/curl-http (fn [_ _] body)
+                llm/stream-http (fn [_ _ on-delta]
+                                  (on-delta "think")
+                                  (json/read-str body :key-fn keyword))]
+    (check "plain completion parses the action"
+           {:done "ok"}
+           (:action (llm/completion->result {} [])))
+    (check "streamed completion reassembles to the same action"
+           {:done "ok"}
+           (:action (llm/completion->result {:stream true} []
+                                            (fn [t] (swap! deltas conj t)))))
+    (check "on-delta saw the running thinking text"
+           ["think"] @deltas)))
+
 (println "ALL LLM TESTS PASSED")

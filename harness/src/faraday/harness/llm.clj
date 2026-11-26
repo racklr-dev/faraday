@@ -34,6 +34,7 @@
       effort (assoc :effort effort)
       (:max-tokens cfg) (assoc :max_tokens (:max-tokens cfg))
       (:logprobs cfg) (assoc :logprobs true :top_logprobs (or (:top-logprobs cfg) 20))
+      (:stream cfg) (assoc :stream true)
       tools (assoc :tools tools :tool-choice (or (:tool-choice cfg) "auto")))))
 
 (declare curl-http content->action)
@@ -101,17 +102,86 @@
        (merge (select-keys u [:prompt_tokens :completion_tokens :total_tokens])
               (cache-usage u))))))
 
-(defn completion->result
-  "Call chat/completions with cfg (which may carry :tools) and return
-  {:action .. :usage ..} from the one response. :action is the canonical action
-  — {:tool-call ..} / {:tool-calls [..]} from native message.tool_calls, or a
-  parsed EDN action / plain-text string from message.content, or nil when
-  neither is present — and :usage is response-usage. Splitting the two out of
-  one HTTP call lets a cost-tracking caller avoid re-calling the model."
-  [cfg messages]
-  (let [body (curl-http cfg messages)
-        resp (json/read-str body :key-fn keyword)
-        msg (get-in resp [:choices 0 :message])
+(defn- stream-http
+  "Stream chat/completions over curl --no-buffer -N, reading SSE data: lines on
+  a daemon thread. Accumulates content/reasoning/tool_calls deltas and the final
+  usage frame, calls (on-delta running-thinking-text) per delta, and returns the
+  reassembled response map (the shape resp->result reads). A torn last frame is
+  flushed at EOF."
+  [cfg messages on-delta]
+  (let [body (json/write-str (assoc (request-body cfg messages) :stream true))
+        pb (doto (ProcessBuilder.
+                  (java.util.ArrayList.
+                   ["curl" "-fsS" "-m" "300" "-N"
+                    (str (:base-url cfg) "/chat/completions")
+                    "-H" "Content-Type: application/json"
+                    "-H" (str "Authorization: Bearer " (:api-key cfg))
+                    "--data-binary" body]))
+             (.redirectErrorStream true))
+        p (.start pb)
+        result (promise)
+        content (StringBuilder.)
+        reasoning (StringBuilder.)
+        usage* (atom nil)
+        finish* (atom nil)
+        tool-calls* (atom {})]
+    (let [t (Thread.
+             (fn []
+               (try
+                 (with-open [rdr (java.io.BufferedReader.
+                                  (java.io.InputStreamReader. (.getInputStream p)))]
+                   (loop []
+                     (when-let [line (.readLine rdr)]
+                       (let [line (str/trim line)]
+                         (when (str/starts-with? line "data:")
+                           (let [payload (str/trim (subs line 5))]
+                             (when (and (seq payload) (not= "[DONE]" payload))
+                               (let [chunk (json/read-str payload :key-fn keyword)
+                                     delta (get-in chunk [:choices 0 :delta])
+                                     u (:usage chunk)]
+                                 (when u (reset! usage* u))
+                                 (when-let [fr (get-in chunk [:choices 0 :finish_reason])]
+                                   (reset! finish* fr))
+                                 (when delta
+                                   (when-let [c (:content delta)] (.append content (str c)))
+                                   (when-let [rc (:reasoning_content delta)] (.append reasoning (str rc)))
+                                   (when-let [tcs (:tool_calls delta)]
+                                     (doseq [tc tcs]
+                                       (let [i (:index tc)
+                                             f (:function tc)
+                                             cur (get @tool-calls* i {:name "" :arguments ""})]
+                                         (swap! tool-calls* assoc i
+                                                {:name (or (:name f) (:name cur))
+                                                 :arguments (str (:arguments cur) (or (:arguments f) ""))}))))
+                                   (when on-delta
+                                     (on-delta (str reasoning content))))))))))))
+                 (deliver result
+                          {:choices [{:index 0
+                                      :message {:role "assistant"
+                                                :content (str content)
+                                                :reasoning_content (str reasoning)
+                                                :tool_calls (when (seq @tool-calls*)
+                                                              (mapv (fn [[i {:keys [name arguments]}]]
+                                                                      {:index i
+                                                                       :function {:name name :arguments arguments}})
+                                                                    (sort-by key @tool-calls*)))}
+                                      :finish_reason @finish*}]
+                           :usage @usage*})
+                 (catch Throwable _ (deliver result nil)))))]
+      (.setDaemon t true)
+      (.start t))
+    (let [exit (.waitFor p)
+          resp (deref result 300000 nil)]
+      (when (not= 0 exit)
+        (throw (ex-info "llm chat/completions stream failed" {:exit exit})))
+      (or resp (throw (ex-info "llm stream produced no response" {}))))))
+
+(defn resp->result
+  "The response -> {:action :usage} half of a completion, extracted pure so a
+  streaming transport can reassemble the same response map and call it —
+  streamed and un-streamed results then cannot drift."
+  [cfg messages resp]
+  (let [msg (get-in resp [:choices 0 :message])
         tcs (seq (:tool_calls msg))
         action (cond
                  tcs
@@ -127,18 +197,27 @@
                        a (try (content->action c) (catch Exception _ nil))]
                    (or a c))
 
-                 :else nil)]
-    (let [usage (response-usage resp)]
-      ;; nodecode's self-calibration: this round's measured prompt over the
-      ;; chars/4 estimate becomes the (provider, model) ratio the next round's
-      ;; estimate scales by, so an unchanged request estimates at exactly what
-      ;; the server counted. No-op when cfg lacks :provider/:model or :usage.
-      (when-let [measured (:prompt_tokens usage)]
-        (ctx/observe-context-estimate!
-         (:provider cfg) (:model cfg)
-         (ctx/estimate-messages-tokens messages) measured)
-        (ctx/observe-context-floor! (:provider cfg) (:model cfg) measured))
-      {:action action :usage usage})))
+                 :else nil)
+        usage (response-usage resp)]
+    (when-let [measured (:prompt_tokens usage)]
+      (ctx/observe-context-estimate!
+       (:provider cfg) (:model cfg)
+       (ctx/estimate-messages-tokens messages) measured)
+      (ctx/observe-context-floor! (:provider cfg) (:model cfg) measured))
+    {:action action :usage usage}))
+
+(defn completion->result
+  "Call chat/completions with cfg (which may carry :tools) and return
+  {:action .. :usage ..}. When cfg :stream is true and on-delta is given, uses
+  stream-http and calls (on-delta running-thinking-text) per SSE delta;
+  otherwise the plain curl transport. Either way the response runs through
+  resp->result."
+  ([cfg messages] (completion->result cfg messages nil))
+  ([cfg messages on-delta]
+   (let [resp (if (and on-delta (:stream cfg))
+                (stream-http cfg messages on-delta)
+                (json/read-str (curl-http cfg messages) :key-fn keyword))]
+     (resp->result cfg messages resp))))
 
 (defn completion->action
   "The action half of completion->result (the historical contract: callers that

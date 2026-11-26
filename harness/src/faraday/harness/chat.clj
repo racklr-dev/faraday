@@ -635,6 +635,11 @@
 (defn- repair-note []
   "Return a valid action: exactly one of a tool call or {:done \"...\"}.")
 
+  ;; Bound by chat-session around run-turn!; model-step calls it with the
+  ;; running thinking text on each streamed delta, and with "" to clear a
+  ;; partial before a retry/escalation.
+  (def ^:dynamic *on-delta* nil)
+
 (defn- model-step
   "The chat's model step: native function calling (tools -> tool_calls) with a
   repair + escalate fallback. `primary` and `strong` are provider cfgs; returns
@@ -643,16 +648,20 @@
   guidance, then escalates to the strong provider. `usage` (a ratom) accumulates
   every billed response's token usage across retries via llm/add-usage."
   [primary strong messages usage]
-  (let [try-cfg (fn [cfg extra]
+  (let [on-delta *on-delta*
+        try-cfg (fn [cfg extra clear?]
                   (let [msgs (if extra (conj messages {:role "user" :content extra}) messages)]
+                    (when (and clear? on-delta) (on-delta ""))
                     (try
-                      (let [r (llm/completion->result (assoc cfg :tools (tools/openai-tools)) msgs)]
+                      (let [cfg (cond-> (assoc cfg :tools (tools/openai-tools))
+                                  on-delta (assoc :stream true))
+                            r (llm/completion->result cfg msgs on-delta)]
                         (swap! usage llm/add-usage (:usage r))
                         (:action r))
                       (catch Exception _ nil))))]
-    (or (try-cfg primary nil)
-        (try-cfg primary (repair-note))
-        (try-cfg strong (str (repair-note) " Escalate: reason carefully."))
+    (or (try-cfg primary nil false)
+        (try-cfg primary (repair-note) true)
+        (try-cfg strong (str (repair-note) " Escalate: reason carefully.") true)
         "")))
 
 (defn- with-circuit-breaker
@@ -1012,7 +1021,7 @@
                                       (try (session/resume stores (deref-thread thread-id))
                                            (catch Exception _ nil)))
                                     [])
-                       :busy? false :error nil :redo []})
+                       :busy? false :error nil :redo [] :thinking nil})
         interrupt (atom false)
         send! (fn [text]
                 (let [text (str/trim (str text))]
@@ -1024,7 +1033,8 @@
                       (reset! interrupt false)
                       (swap! state assoc :busy? true :error nil :messages es :redo [])
                       (future
-                        (binding [*interrupt* interrupt]
+                        (binding [*interrupt* interrupt
+                                  *on-delta* (fn [t] (swap! state assoc :thinking t))]
                           (run-turn! {:call call :exec exec :system system
                                       :max-turns max-turns :max-stall max-stall
                                       :interrupt interrupt
@@ -1048,7 +1058,8 @@
                                                              (str "Requires a claimed task (flash: mutating — " (format "%.0f%%" (* 100 (:mutating p))) ").")
                                                              :else nil)))))))}
 
-                                     state es))
+                                     state es)
+                        (swap! state assoc :thinking nil))
                         (when (and stores thread-id)
                           (try (session/persist! stores (deref-thread thread-id) (:messages @state))
                                (catch Exception _ nil))))))))]
@@ -1492,13 +1503,14 @@
     (seq facts)
     (str "\n\nYou remember these facts from earlier sessions:\n" (pr-str facts))))
 
-(defn- transcript-view
-  "The transcript vbox hiccup for `messages`. Pure in its args, so a cached
-  caller can reuse the same hiccup object while the transcript is unchanged
-  (scrolling only moves the viewport; it never rebuilds the transcript). Tool
-  calls and their results group into one foldable step."
-  [messages expanded wrap]
-  (let [grouped (group-tool-steps messages)
+  (defn- transcript-view
+  "The transcript vbox hiccup for `messages`. `thinking` is the live reasoning
+  text, appended as a synthetic :thinking entry (never persisted, cleared when
+  the real message lands). Pure in its args, so a cached caller can reuse the
+  same hiccup object while the transcript is unchanged."
+  [messages thinking expanded wrap]
+  (let [grouped (cond-> (vec (group-tool-steps messages))
+                  (seq thinking) (conj {:role :thinking :text thinking}))
         last-assistant-idx (last (keep-indexed (fn [i e] (when (= :assistant (:role e)) i)) grouped))]
     (into [:vbox {:spacing 0 :padding [1 2 1 1]}]
           (if (empty? grouped)
@@ -1511,11 +1523,11 @@
 (defn- transcript-view-cached
   "Single-entry memo over transcript-view: keyed by [messages @expanded wrap],
   so an unchanged transcript returns the identical hiccup object."
-  [messages expanded wrap]
-  (let [k [messages @expanded wrap]]
+  [messages thinking expanded wrap]
+  (let [k [messages thinking @expanded wrap]]
     (if (= @transcript-key k)
       @transcript-cache
-      (let [h (transcript-view messages expanded wrap)]
+      (let [h (transcript-view messages thinking expanded wrap)]
         (reset! transcript-key k)
         (reset! transcript-cache h)
         h))))
@@ -2267,7 +2279,7 @@
                   (scroll-to-bottom!)
                   ((:send! sess) text)))))]
     (fn []
-      (let [{:keys [messages busy? error]} @state
+      (let [{:keys [messages thinking busy? error]} @state
             wrap (wrap-width opts (or @cols (live-cols) 92))
             ccfg @cfg
             _ (when-not (and (identical? messages (:msgs @ctx-cache))
@@ -2313,7 +2325,7 @@
                                 (k/match? ev "home") (k/match? ev "end"))
                             (do (transcript-scroll! ev follow?) true)))}
          [:scroll {:orientation :vertical :vexpand true}
-          (transcript-view-cached messages expanded wrap)]
+          (transcript-view-cached messages thinking expanded wrap)]
          [:hbox {:spacing 2 :margin [1 0 0 0]}
           (if busy?
             [:spinner {:tick @tick :label "working" :color (themes/color :tool)}]
