@@ -64,7 +64,7 @@ rap result callback over a bounded warm VM pool — infinity's model. Also the
 first self-improvement slice: `faraday improve` observes a loop run, proposes
 a manifest rewrite, and routes it through the same soak/rollback gate, then
 persists the winner to the task. The middleware spine (faraday.agent.mw) now
-compiles a manifest + deps into the ROADMAP wrap-* chain — history windowing,
+compiles a manifest + deps into the wrap-* chain — history windowing,
 hot-memory injection, the routed/repairing model step, one permission decision
 point, the finalization goal judge, and per-cell guardrails that fire a scope's
 pre/post hooks into hook_runs — and `faraday run` drives every task through it.

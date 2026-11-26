@@ -1,4 +1,4 @@
-;; faraday-agent middleware spine test: the ROADMAP wrap-* chain compiled from
+;; faraday-agent middleware spine test: the wrap-* chain compiled from
 ;; a manifest + deps. Hermetic: no rap/scheduler/KVM — each wrapper is called
 ;; directly, and compile-step-fn runs against a fake hook runner + recorder.
 ;; Proves: history windowing, repair honesty, permission denial, the goal judge,

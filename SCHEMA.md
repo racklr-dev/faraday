@@ -34,7 +34,7 @@ One row per project root.
 
 ### scopes — the project/folder metadata schema
 
-A scope is a folder (the root scope has `rel_path` = empty string). Nesting is path-prefix: a hook on `src/` applies to `src/db/` and everything beneath it. A deeper scope adds to its ancestors; it does not replace them (whether it may shadow by cell+position+kind is Still-open in ROADMAP).
+A scope is a folder (the root scope has `rel_path` = empty string). Nesting is path-prefix: a hook on `src/` applies to `src/db/` and everything beneath it. A deeper scope adds to its ancestors; it does not replace them.
 
     create table if not exists scopes (
       id         text primary key,

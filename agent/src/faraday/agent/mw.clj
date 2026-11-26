@@ -14,7 +14,7 @@
 (ns faraday.agent.mw
   "The nREPL middleware spine: a manifest + deps compiles to a step-fn chain.
 
-  Each wrap-* is one middleware of the ROADMAP stack:
+  Each wrap-* is one middleware of the stack:
 
     wrap-history    window the transcript to the context budget
     wrap-memory     inject hot memories inline; index the thread once
@@ -377,7 +377,7 @@
 ;; -- the chain ----------------------------------------------------------------
 
 (def default-stack
-  "The ROADMAP order, applied innermost-first: history, compress, memory,
+  "The stack order, applied innermost-first: history, compress, memory,
   router, repair, permission, goal, guardrails (outermost)."
   [wrap-history wrap-compress wrap-memory wrap-router wrap-repair wrap-permission
    wrap-goal wrap-guardrails])
