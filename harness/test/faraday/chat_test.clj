@@ -495,9 +495,9 @@
         {:t :line :role :eval :kind :text :text "two"}]
        (chat/entry-segments {:role :eval :text "one\ntwo"} 40))
 
-(check "live-eval-cap keeps only the tail"
+(check "live-tail keeps only the tail"
        (str/join "\n" (range 20 100))
-       (#'chat/live-eval-cap (str/join "\n" (range 100))))
+       (#'chat/live-tail (str/join "\n" (range 100))))
 
   (println "chat_test OK"))
 

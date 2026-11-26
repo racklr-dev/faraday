@@ -79,11 +79,13 @@
    {:deepseek {:provider-type "openai-completions"
                :base-url "https://api.deepseek.com/v1"
                :model "deepseek-flash"
-               :api-key-env "DEEPSEEK_API_KEY"}
+               :api-key-env "DEEPSEEK_API_KEY"
+               :context-tokens 1048576}
     :deepseek-pro {:provider-type "openai-completions"
                    :base-url "https://api.deepseek.com/v1"
                    :model "deepseek-v4-pro"
-                   :api-key-env "DEEPSEEK_API_KEY"}}
+                   :api-key-env "DEEPSEEK_API_KEY"
+                   :context-tokens 1048576}}
    :roles
    {:default {:provider :deepseek}
     :repair {:provider :deepseek}
@@ -205,7 +207,12 @@
                 (:model base)
                 "deepseek-flash")
      :reasoning (or (:reasoning entry) (:reasoning base))
-     :temperature (or (:temperature entry) (:temperature base))}))
+     :temperature (or (:temperature entry) (:temperature base))
+     :context-tokens (or (:context-tokens opts)
+                         (:context-tokens entry)
+                         (:context-tokens base)
+                         1048576)
+     :context-tokens-operator-p (boolean (:context-tokens opts))}))
 
 ;; -- roles ---------------------------------------------------------------------
 
@@ -375,6 +382,8 @@
      :system (or (:system entry))
      :reasoning (or (:reasoning entry))
      :context (normalize-context (or (:context opts) (:context entry) (:context config)))
+     :context-tokens (or (:context-tokens opts) (:context-tokens p))
+     :context-tokens-operator-p (boolean (:context-tokens opts))
      :wrap (or (:wrap opts) (:wrap entry))}))
 
 ;; -- volume mounts (compose-style) --------------------------------------------

@@ -436,15 +436,21 @@
   each line of live stdout, and with nil to clear the live eval entry once
   the tool result lands." nil)
 
-(defn- live-eval-cap
-  "Cap live tool output to the last 80 lines so a flood cannot swamp the
-  transcript; the persisted tool-result keeps the full (truncated) text."
+(defn- live-tail
+  "Cap live transcript text (thinking or tool output) to a bounded tail — at most
+  80 lines and 4000 chars — so a long reasoning stream or a flood cannot swamp
+  the render; the persisted entry keeps the full text."
   [s]
-  (let [lines (str/split-lines (str (or s "")))
+  (let [s (str (or s ""))
+        max-chars 4000
+        s (if (> (count s) max-chars)
+            (subs s (- (count s) max-chars))
+            s)
+        lines (str/split-lines s)
         max-lines 80]
     (if (> (count lines) max-lines)
       (str/join "\n" (take-last max-lines lines))
-      (str (or s "")))))
+      s)))
 
 (def ^:private dump-guard-re
   #"(?:(?:^|[;&|]\s*)|(?:bash|sh)\s+(?:-lc|-c)\s+)(?:cat\s+\S|head\s+-n\s*[0-9]{4,}\s+\S)")
@@ -851,9 +857,16 @@
         :else
         (let [outcome (try (step! es left)
                            (catch Exception e
-                             {:fault (or (ex-message e) "turn failed")}))]
+                             {:fault (or (ex-message e) "turn failed") :ex e}))]
           (cond
-            (:fault outcome) (swap! state assoc :busy? false :error (:fault outcome))
+            (:fault outcome)
+            (let [msg (:fault outcome)
+                  ex (:ex outcome)]
+              (swap! state update :messages conj {:role :assistant :text (str "Turn stopped: " msg)})
+              (swap! state assoc :busy? false :error msg)
+              (binding [*out* *err*]
+                (println "TURN FAULT:" msg)
+                (when ex (.printStackTrace ^Throwable ex))))
             (= :done outcome) (swap! state assoc :busy? false)
             (:fatal outcome)
             (let [msg (:fatal outcome)]
@@ -1059,12 +1072,12 @@
                       (swap! state assoc :busy? true :error nil :messages es :redo [])
                       (future
                         (binding [*interrupt* interrupt
-                                  *on-delta* (fn [t] (swap! state assoc :thinking t))
+                                  *on-delta* (fn [t] (swap! state assoc :thinking (live-tail t)))
                                   *on-eval* (fn [line]
                                               (if (nil? line)
                                                 (swap! state assoc :eval nil)
                                                 (swap! state update :eval
-                                                       #(live-eval-cap (str (or % "") line "\n")))))]
+                                                       #(live-tail (str (or % "") line "\n")))))]
                           (run-turn! {:call call :exec exec :system system
                                       :max-turns max-turns :max-stall max-stall
                                       :interrupt interrupt

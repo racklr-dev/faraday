@@ -124,7 +124,24 @@
         reasoning (StringBuilder.)
         usage* (atom nil)
         finish* (atom nil)
-        tool-calls* (atom {})]
+        tool-calls* (atom {})
+        done? (atom false)
+        finish! (fn [stop-curl?]
+                  (when (compare-and-set! done? false true)
+                    (when stop-curl?
+                      (try (.destroy p) (catch Exception _ nil)))
+                    (deliver result
+                             {:choices [{:index 0
+                                         :message {:role "assistant"
+                                                   :content (str content)
+                                                   :reasoning_content (str reasoning)
+                                                   :tool_calls (when (seq @tool-calls*)
+                                                                 (mapv (fn [[i {:keys [name arguments]}]]
+                                                                         {:index i
+                                                                          :function {:name name :arguments arguments}})
+                                                                       (sort-by key @tool-calls*)))}
+                                         :finish_reason @finish*}]
+                              :usage @usage*})))]
     (let [t (Thread.
              (fn []
                (try
@@ -135,13 +152,14 @@
                        (let [line (str/trim line)]
                          (when (str/starts-with? line "data:")
                            (let [payload (str/trim (subs line 5))]
-                             (when (and (seq payload) (not= "[DONE]" payload))
+                             (cond (= "[DONE]" payload) (finish! true) (seq payload)
                                (let [chunk (json/read-str payload :key-fn keyword)
                                      delta (get-in chunk [:choices 0 :delta])
                                      u (:usage chunk)]
                                  (when u (reset! usage* u))
                                  (when-let [fr (get-in chunk [:choices 0 :finish_reason])]
-                                   (reset! finish* fr))
+                                   (reset! finish* fr)
+                                   (finish! true))
                                  (when delta
                                    (when-let [c (:content delta)] (.append content (str c)))
                                    (when-let [rc (:reasoning_content delta)] (.append reasoning (str rc)))
@@ -154,7 +172,8 @@
                                                 {:name (or (:name f) (:name cur))
                                                  :arguments (str (:arguments cur) (or (:arguments f) ""))}))))
                                    (when on-delta
-                                     (on-delta (str reasoning content))))))))))))
+                                     (on-delta (str reasoning content)))))))))
+                       (recur))))
                  (deliver result
                           {:choices [{:index 0
                                       :message {:role "assistant"
@@ -170,9 +189,11 @@
                  (catch Throwable _ (deliver result nil)))))]
       (.setDaemon t true)
       (.start t))
-    (let [exit (.waitFor p)
-          resp (deref result 300000 nil)]
-      (when (not= 0 exit)
+    (let [exited? (.waitFor p 300 java.util.concurrent.TimeUnit/SECONDS)
+          _ (when-not exited? (.destroyForcibly p))
+          resp (deref result 10000 nil)
+          exit (when exited? (.exitValue p))]
+      (when (and exited? (not @done?) (not= 0 exit))
         (throw (ex-info "llm chat/completions stream failed" {:exit exit})))
       (or resp (throw (ex-info "llm stream produced no response" {}))))))
 
