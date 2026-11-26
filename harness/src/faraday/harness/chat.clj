@@ -430,6 +430,21 @@
   "Bound by chat-session around run-turn! on the worker thread; tool executors
   poll it to stop a running command mid-flight." nil)
 
+(def ^:dynamic *on-eval*
+  "Bound by chat-session around run-turn!; the tool executors call it with
+  each line of live stdout, and with nil to clear the live eval entry once
+  the tool result lands." nil)
+
+(defn- live-eval-cap
+  "Cap live tool output to the last 80 lines so a flood cannot swamp the
+  transcript; the persisted tool-result keeps the full (truncated) text."
+  [s]
+  (let [lines (str/split-lines (str (or s "")))
+        max-lines 80]
+    (if (> (count lines) max-lines)
+      (str/join "\n" (take-last max-lines lines))
+      (str (or s "")))))
+
 (def ^:private dump-guard-re
   #"(?:(?:^|[;&|]\s*)|(?:bash|sh)\s+(?:-lc|-c)\s+)(?:cat\s+\S|head\s+-n\s*[0-9]{4,}\s+\S)")
 
@@ -464,9 +479,7 @@
       :else
       (if-let [guard (dump-guard argv)]
         {:status :error :error guard}
-        (let [r (if *interrupt*
-                (h/run-command-interruptible argv 120000 *interrupt*)
-                (h/run-command argv 120000))]
+        (let [r (h/run-command-streaming argv 120000 *on-eval* :interrupt *interrupt*)]
         (cond
           (:interrupted? r)
           {:status :error :error "interrupted" :interrupted? true :stdout (:out r)}
@@ -734,28 +747,40 @@
         max-stall (or max-stall 3)
         context-budget (or context-budget 40)
         run-one (fn [name args es]
-                  (let [attempt (fn [res]
-                                  [{:role :tool-call :name name :args args}
-                                   {:role :tool-result :name name
-                                    :status (:status res)
-                                    :exit (:exit res)
-                                    :text (truncate-tool-out (or (:stdout res) (:stderr res) ""))
-                                    :error (:error res)
-                                    :fatal? (true? (:fatal? res))
-                                    :interrupted? (true? (:interrupted? res))
-                                    :progress? (if (contains? res :progress?)
-                                                 (:progress? res)
-                                                 (= :ok (:status res)))}])
-                        res1 (if-let [refusal (and guard (guard {:name name :args args} es))]
-                               {:status :error :error refusal}
-                               (exec name args))]
-                    (if (and (true? (:retryable? res1))
-                             (not (:interrupted? res1)))
-                      ;; the sandbox recycled itself; replay once on the fresh
-                      ;; VM and record both attempts so the trace shows the
-                      ;; recycle + retry instead of a bare error
-                      (vec (concat (attempt res1) (attempt (exec name args))))
-                      (attempt res1))))
+                  (let [mk-call (fn [] {:role :tool-call :name name :args args})
+                        mk-result (fn [res]
+                                    {:role :tool-result :name name
+                                     :status (:status res)
+                                     :exit (:exit res)
+                                     :text (truncate-tool-out (or (:stdout res) (:stderr res) ""))
+                                     :error (:error res)
+                                     :fatal? (true? (:fatal? res))
+                                     :interrupted? (true? (:interrupted? res))
+                                     :progress? (if (contains? res :progress?)
+                                                  (:progress? res)
+                                                  (= :ok (:status res)))})
+                        live-call! (fn []
+                                     (swap! state update :messages conj (mk-call))
+                                     (when *on-delta* (*on-delta* "")))
+                        live-result! (fn [res]
+                                       (let [re (mk-result res)]
+                                         (swap! state update :messages conj re)
+                                         (when *on-eval* (*on-eval* nil))
+                                         re))
+                        refusal (and guard (guard {:name name :args args} es))]
+                    (live-call!)
+                    (let [res1 (if refusal {:status :error :error refusal} (exec name args))]
+                      (if (and (true? (:retryable? res1)) (not (:interrupted? res1)))
+                        ;; the sandbox recycled itself; replay once on the fresh
+                        ;; VM and record both attempts so the trace shows the
+                        ;; recycle + retry instead of a bare error
+                        (let [re1 (live-result! res1)
+                              _ (live-call!)
+                              res2 (exec name args)
+                              re2 (live-result! res2)]
+                          [(mk-call) re1 (mk-call) re2])
+                        (let [re (live-result! res1)]
+                          [(mk-call) re])))))
         budget-note (fn [left]
                        (cond
                          (<= left 2)
@@ -781,7 +806,6 @@
                     (let [entries (vec (mapcat (fn [tc] (run-one (:name tc) (:args tc) es)) tcs))
                           fatal (some (fn [e] (when (:fatal? e) (or (:error e) "fatal tool error"))) entries)
                           interrupted (boolean (some :interrupted? entries))]
-                      (swap! state update :messages into entries)
                       {:cont (into es entries)
                        :progress? (boolean (some :progress? entries))
                        :fatal fatal
@@ -1021,7 +1045,7 @@
                                       (try (session/resume stores (deref-thread thread-id))
                                            (catch Exception _ nil)))
                                     [])
-                       :busy? false :error nil :redo [] :thinking nil})
+                       :busy? false :error nil :redo [] :thinking nil :eval nil})
         interrupt (atom false)
         send! (fn [text]
                 (let [text (str/trim (str text))]
@@ -1034,7 +1058,12 @@
                       (swap! state assoc :busy? true :error nil :messages es :redo [])
                       (future
                         (binding [*interrupt* interrupt
-                                  *on-delta* (fn [t] (swap! state assoc :thinking t))]
+                                  *on-delta* (fn [t] (swap! state assoc :thinking t))
+                                  *on-eval* (fn [line]
+                                              (if (nil? line)
+                                                (swap! state assoc :eval nil)
+                                                (swap! state update :eval
+                                                       #(live-eval-cap (str (or % "") line "\n")))))]
                           (run-turn! {:call call :exec exec :system system
                                       :max-turns max-turns :max-stall max-stall
                                       :interrupt interrupt
@@ -1059,7 +1088,7 @@
                                                              :else nil)))))))}
 
                                      state es)
-                        (swap! state assoc :thinking nil))
+                        (swap! state assoc :thinking nil :eval nil))
                         (when (and stores thread-id)
                           (try (session/persist! stores (deref-thread thread-id) (:messages @state))
                                (catch Exception _ nil))))))))]
@@ -1139,6 +1168,10 @@
                      (select-keys e [:name :status :exit :error :text]))
                     wrap))
 
+    :eval
+    (map (fn [line] {:t :line :role :eval :kind :text :text line})
+         (word-wrap (:text e) wrap))
+
     ;; unknown roles read as plain assistant text
     (map (fn [line] {:t :line :role :assistant :kind :text :text line})
          (word-wrap (str (:text e)) wrap))))
@@ -1167,6 +1200,7 @@
                  {:color (themes/color :body)})
     :tool-call {:color (themes/color :tool) :bold true}
     :tool-result {:color (themes/color :muted) :dim true}
+    :eval {:color (themes/color :muted) :dim true}
     {:color (themes/color :body)}))
 
 (defn- line-prefix
@@ -1177,6 +1211,7 @@
      :user "you> "
      :tool-call "  → "
      :tool-result "    "
+     :eval "    "
      :assistant (case kind
                   :heading "▍ "
                   :quote "│ "
@@ -1560,12 +1595,14 @@
 
   (defn- transcript-view
   "The transcript vbox hiccup for `messages`. `thinking` is the live reasoning
-  text, appended as a synthetic :thinking entry (never persisted, cleared when
-  the real message lands). Pure in its args, so a cached caller can reuse the
-  same hiccup object while the transcript is unchanged."
-  [messages thinking expanded wrap]
+  text and `eval` the live tool output, appended as synthetic :thinking and
+  :eval entries (never persisted, cleared when the real entry lands). Pure in
+  its args, so a cached caller can reuse the same hiccup object while the
+  transcript is unchanged."
+  [messages thinking eval expanded wrap]
   (let [grouped (cond-> (vec (group-tool-steps messages))
-                  (seq thinking) (conj {:role :thinking :text thinking}))
+                  (seq thinking) (conj {:role :thinking :text thinking})
+                  (seq eval) (conj {:role :eval :text eval}))
         last-assistant-idx (last (keep-indexed (fn [i e] (when (= :assistant (:role e)) i)) grouped))]
     (into [:vbox {:spacing 0 :padding [1 2 1 1]}]
           (if (empty? grouped)
@@ -1576,13 +1613,14 @@
 (defonce ^:private transcript-key (atom nil))
 
 (defn- transcript-view-cached
-  "Single-entry memo over transcript-view: keyed by [messages @expanded wrap],
-  so an unchanged transcript returns the identical hiccup object."
-  [messages thinking expanded wrap]
-  (let [k [messages thinking @expanded wrap]]
+  "Single-entry memo over transcript-view: keyed by [messages thinking eval
+  @expanded wrap], so an unchanged transcript returns the identical hiccup
+  object."
+  [messages thinking eval expanded wrap]
+  (let [k [messages thinking eval @expanded wrap]]
     (if (= @transcript-key k)
       @transcript-cache
-      (let [h (transcript-view messages thinking expanded wrap)]
+      (let [h (transcript-view messages thinking eval expanded wrap)]
         (reset! transcript-key k)
         (reset! transcript-cache h)
         h))))
@@ -2334,7 +2372,7 @@
                   (scroll-to-bottom!)
                   ((:send! sess) text)))))]
     (fn []
-      (let [{:keys [messages thinking busy? error]} @state
+      (let [{:keys [messages thinking eval busy? error]} @state
             wrap (wrap-width opts (or @cols (live-cols) 92))
             ccfg @cfg
             _ (when-not (and (identical? messages (:msgs @ctx-cache))
@@ -2380,7 +2418,7 @@
                                 (k/match? ev "home") (k/match? ev "end"))
                             (do (transcript-scroll! ev follow?) true)))}
          [:scroll {:orientation :vertical :vexpand true}
-          (transcript-view-cached messages thinking expanded wrap)]
+          (transcript-view-cached messages thinking eval expanded wrap)]
          [:hbox {:spacing 2 :margin [1 0 0 0]}
           (if busy?
             [:spinner {:tick @tick :label "working" :color (themes/color :tool)}]

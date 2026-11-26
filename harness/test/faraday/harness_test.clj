@@ -199,6 +199,26 @@
   (check-true "interruptible command stops early" (:interrupted? r))
   (check-true "interruptible command returns fast" (< (- (System/currentTimeMillis) start) 5000)))
 
+(let [lines (atom [])
+      r (h/run-command-streaming ["sh" "-c" "printf 'a\\nb\\n'"] 8000 (fn [l] (swap! lines conj l)))]
+  (check "streaming run-command returns exact out"
+         {:exit 0 :out "a\nb\n" :timeout? false}
+         (select-keys r [:exit :out :timeout?]))
+  (check "streaming run-command saw each line in order" ["a" "b"] @lines))
+
+(check "streaming run-command preserves unterminated output"
+       {:exit 0 :out "x" :timeout? false}
+       (select-keys (h/run-command-streaming ["sh" "-c" "printf 'x'"] 8000 nil) [:exit :out :timeout?]))
+
+(let [interrupt (atom false)
+      start (System/currentTimeMillis)
+      fut (future (h/run-command-streaming ["sleep" "5"] 30000 nil :interrupt interrupt))
+      _ (Thread/sleep 150)
+      _ (reset! interrupt true)
+      r (deref fut 5000 :no-result)]
+  (check-true "streaming command stops early" (:interrupted? r))
+  (check-true "streaming command returns fast" (< (- (System/currentTimeMillis) start) 5000)))
+
 (println "ALL HARNESS TESTS PASSED")
 
 (shutdown-agents)

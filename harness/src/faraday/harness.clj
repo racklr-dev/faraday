@@ -235,6 +235,35 @@
 
 ;; -- out-of-process command running ------------------------------------------
 
+(defn- stream-lines
+  "Read `stream` to a string on a daemon Java thread, calling (on-line line)
+  with each completed line (without its newline) as it arrives. The promise
+  delivers the exact full text, slurp-equivalent, so a streaming run-command
+  returns the same :out a slurp-based reader would."
+  [stream on-line]
+  (let [p (promise)
+        sb (StringBuilder.)
+        line (StringBuilder.)]
+    (doto (Thread.
+           (fn []
+             (try
+               (with-open [rdr (java.io.BufferedReader.
+                                (java.io.InputStreamReader. stream))]
+                 (loop [ch (.read rdr)]
+                   (when (not= -1 ch)
+                     (let [c (char ch)]
+                       (.append sb c)
+                       (if (= \newline c)
+                         (do (when on-line (on-line (str line)))
+                             (.setLength line 0))
+                         (.append line c)))
+                     (recur (.read rdr)))))
+               (deliver p (str sb))
+               (catch Throwable _ (deliver p (str sb))))))
+      (.setDaemon true)
+      (.start))
+    p))
+
 (defn- stream-reader
   "Read `stream` to a string on a daemon Java thread and return a promise of
   it. `future` is deliberately avoided: jolt's future pool keeps an idle
@@ -287,6 +316,36 @@
               {:exit nil :out (deref reader 2000 "") :timeout? true :interrupted? false})
 
           :else (recur deadline))))))
+
+(defn run-command-streaming
+  "Like run-command, but calls (on-line line) with each line of merged
+  stdout/stderr as it arrives, on the reader daemon thread. Returns the same
+  shape as run-command; an :interrupt atom adds interruptibility (and an
+  :interrupted? true result when it fires). on-line may be nil."
+  [argv timeout-ms on-line & {:keys [interrupt poll-ms] :or {poll-ms 50}}]
+  (let [pb (doto (ProcessBuilder. ^java.util.List (java.util.ArrayList. (map str argv)))
+             (.redirectErrorStream true))
+        p (.start pb)
+        reader (stream-lines (.getInputStream p) on-line)]
+    (if interrupt
+      (loop [deadline (+ (System/currentTimeMillis) timeout-ms)]
+        (if (.waitFor p poll-ms java.util.concurrent.TimeUnit/MILLISECONDS)
+          {:exit (.exitValue p) :out (deref reader 8000 "") :timeout? false :interrupted? false}
+          (cond
+            @interrupt
+            (do (.destroyForcibly p)
+                {:exit nil :out (deref reader 1000 "") :timeout? false :interrupted? true})
+
+            (> (System/currentTimeMillis) deadline)
+            (do (.destroyForcibly p)
+                {:exit nil :out (deref reader 2000 "") :timeout? true :interrupted? false})
+
+            :else (recur deadline))))
+      (let [exited? (.waitFor p (long (or timeout-ms 8000)) java.util.concurrent.TimeUnit/MILLISECONDS)]
+        (if exited?
+          {:exit (.exitValue p) :out (deref reader 8000 "") :timeout? false}
+          (do (.destroyForcibly p)
+              {:exit nil :out (deref reader 2000 "") :timeout? true}))))))
 
 ;; -- hooks -------------------------------------------------------------------
 

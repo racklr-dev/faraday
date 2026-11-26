@@ -471,6 +471,34 @@
   (check "git-status dirty repo counts the change" "dirty (1 changed)" (chat/git-status d))
   (check "git-summary joins branch and status" true (str/includes? (chat/git-summary d) "dirty (1 changed)")))
 
+;; -- live eval streaming: the executor's stdout flows through *on-eval* --------
+(let [streamed (atom [])
+      calls (atom 0)
+      state (atom {:messages []})
+      fake-call (fn [_]
+                  (if (= 1 (swap! calls inc))
+                    "{:tool-call {:name \"run_shell\" :args {:argv [\"x\"]}}}"
+                    "{:done \"ok\"}"))
+      fake-exec (fn [_ _]
+                  (when chat/*on-eval*
+                    (chat/*on-eval* "one")
+                    (chat/*on-eval* "two"))
+                  {:status :ok :exit 0 :stdout "one\ntwo\n"})]
+  (binding [chat/*on-eval* (fn [line] (swap! streamed conj line))]
+    (chat/run-turn! {:call fake-call :exec fake-exec :system "S" :max-turns 8} state [{:role :user :text "go"}]))
+  (check "executor stdout streams through *on-eval*" ["one" "two" nil] @streamed)
+  (check "live turn records call+result+answer" 3 (count (:messages @state)))
+  (check "live turn ends with the answer" "ok" (-> @state :messages last :text)))
+
+(check "entry-segments renders live eval as muted output"
+       [{:t :line :role :eval :kind :text :text "one"}
+        {:t :line :role :eval :kind :text :text "two"}]
+       (chat/entry-segments {:role :eval :text "one\ntwo"} 40))
+
+(check "live-eval-cap keeps only the tail"
+       (str/join "\n" (range 20 100))
+       (#'chat/live-eval-cap (str/join "\n" (range 100))))
+
   (println "chat_test OK"))
 
 (shutdown-agents)
