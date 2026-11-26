@@ -1,5 +1,15 @@
 {:paths ["src" "resources"]
 
+ ;; lev (jlt-commons/lev) needs its C kernels + a BLAS loaded into this
+ ;; process. The kernels live at ~/.config/lev/native (built by lev's `jolt
+ ;; prepare`); BLAS is the system OpenBLAS. Both optional so faraday still
+ ;; starts without them (lev-guard degrades to the regex floor).
+ :jolt/native
+ [{:name "lev_kernels" :optional true
+   :linux ["/home/jm/.config/lev/native/liblev_kernels.so"]}
+  {:name "blas" :optional true
+   :linux ["libopenblas.so.0" "libopenblas.so" "libblas.so.3"]}]
+
  :deps {racklr-dev/jolt-markdown
         {:local/root "../../jolt-markdown"}
 
