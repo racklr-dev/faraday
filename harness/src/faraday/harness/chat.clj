@@ -1288,23 +1288,56 @@
   [seg]
   (case (:t seg)
     :code [:box {:bg (themes/color :code-slab) :hexpand true}
-           (into [:vbox {:spacing 0 :padding [0 1 0 1]}]
-                 (map (fn [line]
-                        [:label {:label line :color (themes/color :inline-code)}])
-                      (:lines seg)))]
+           [:label {:label (str/join "\n" (:lines seg))
+                    :color (themes/color :inline-code)
+                    :padding [0 1 0 1]}]]
     :hr [:separator {:char "─" :color (themes/color :muted) :hexpand true}]
     :table (table-hiccup seg)
     :spacer [:label {:label " "}]
     :heading [:box {:bg (themes/heading-band (:level seg)) :hexpand true}
-              (into [:vbox {:spacing 0 :padding [0 1 0 1]}]
-                    (map (fn [line]
-                           (spans-hiccup :assistant :heading "" line))
-                         (:lines seg)))]
+              [:label {:label (str/join "\n" (map #(md/spans-text %) (:lines seg)))
+                       :color (themes/color :heading) :bold true
+                       :padding [0 1 0 1]}]]
     (let [{:keys [role kind text spans checked? num]} seg]
       (if (and (= role :assistant) (seq spans))
         (spans-hiccup role kind (line-prefix role kind checked? num) spans)
         [:label (assoc (line-style role kind)
                        :label (str (line-prefix role kind checked? num) text))]))))
+
+(defn- line-label
+  "When `seg` renders as one label, its text and label props; nil when it would
+  render as an hbox of spans (a prefix plus styled spans, or several spans).
+  Grouping consecutive segments that share props into one multi-line label is
+  what keeps a long transcript scrollable: a plain answer becomes one label
+  instead of one label per line."
+  [{:keys [role kind text spans checked? num] :as seg}]
+  (when (= :line (:t seg))
+    (let [prefix (line-prefix role kind checked? num)
+          base (line-style role kind)]
+      (if (and (= role :assistant) (seq spans))
+        (when (and (empty? prefix) (= 1 (count spans)))
+          (let [s (first spans)]
+            {:text (:text s)
+             :props (span-props base s)}))
+        {:text (str prefix text)
+         :props base}))))
+
+(defn- line-segs-hiccup
+  "A run of :line segments as hiccup, grouping consecutive segments that render
+  with identical label props into one multi-line label."
+  [segs]
+  (let [labeled (mapv (fn [seg] (or (line-label seg) {:seg seg})) segs)]
+    (loop [remaining labeled out []]
+      (if (empty? remaining)
+        (vec out)
+        (let [item (first remaining)]
+          (if-let [props (:props item)]
+            (let [run (take-while #(and (:props %) (= props (:props %))) remaining)
+                  n (count run)]
+              (recur (drop n remaining)
+                     (conj out [:label (assoc props :label (str/join "\n" (map :text run)))])))
+            (recur (next remaining)
+                   (conj out (segment-hiccup (:seg item))))))))))
 
 ;; -- folding -----------------------------------------------------------------
 ;; Tool results and long code blocks are the bulky, low-signal parts of a
@@ -1323,6 +1356,37 @@
             :color (themes/color :muted)
             :on-click #(toggle-expanded! expanded k)}])
 
+(defn- assistant-segs-hiccup
+  "An assistant entry's segments as hiccup: long code blocks keep their fold
+  header, and runs of plain :line segments collapse into one multi-line label
+  per style, so a 500-line answer is a handful of labels rather than 500."
+  [expanded last-assistant? i segs]
+  (loop [segs (seq segs) code-idx 0 out []]
+    (if-not segs
+      (vec out)
+      (let [seg (first segs)]
+        (cond
+          (= :code (:t seg))
+          (let [k [i :code code-idx]
+                open? (contains? @expanded k)
+                lines (count (:lines seg))]
+            (recur (next segs) (inc code-idx)
+                   (conj out
+                         (if (and (not last-assistant?) (> lines 12))
+                           [:vbox {:spacing 0}
+                            (fold-header expanded k open? (str "code · " lines " lines"))
+                            (when open? (segment-hiccup seg))]
+                           (segment-hiccup seg)))))
+
+          (= :line (:t seg))
+          (let [run (take-while #(= :line (:t %)) segs)
+                n (count run)]
+            (recur (drop n segs) code-idx
+                   (into out (line-segs-hiccup run))))
+
+          :else
+          (recur (next segs) code-idx (conj out (segment-hiccup seg))))))))
+
 (defn- tool-result-summary
   "One line for a folded tool result: name, status, exit, and line count."
   [e]
@@ -1337,8 +1401,9 @@
   (let [lines (->> (str/split-lines (str (or (:text e) "")))
                    (mapcat #(hard-wrap % wrap)))]
     [:box {:bg (themes/color :code-slab) :hexpand true}
-     (into [:vbox {:spacing 0 :padding [0 1 0 1]}]
-           (map (fn [line] [:label {:label line :color (themes/color :inline-code)}]) lines))]))
+     [:label {:label (str/join "\n" lines)
+              :color (themes/color :inline-code)
+              :padding [0 1 0 1]}]]))
 
 (defn- seg-line-count
   "Rendered line count of entry-segments output: prose segments are one line
@@ -1405,7 +1470,7 @@
        (when open?
          [:vbox {:spacing 0}
           (into [:vbox {:spacing 0}]
-                (map segment-hiccup (entry-segments call wrap)))
+                (line-segs-hiccup (entry-segments call wrap)))
           (tool-result-body result wrap)])])
 
     :tool-result
@@ -1424,28 +1489,18 @@
           [:vbox {:spacing 0}
            (fold-header expanded k open? (assistant-summary segs (seg-line-count segs)))
            (when open?
-             (into [:vbox {:spacing 0}] (map segment-hiccup segs)))])
+             (into [:vbox {:spacing 0}]
+                   (assistant-segs-hiccup expanded last-assistant? i segs)))])
         (into [:vbox {:spacing 0}]
-              (map-indexed
-               (fn [ci seg]
-                 (if (and (not last-assistant?)
-                         (= :code (:t seg))
-                         (> (count (:lines seg)) 12))
-                   (let [k [i :code ci]
-                         open? (contains? @expanded k)]
-                     [:vbox {:spacing 0}
-                      (fold-header expanded k open? (str "code · " (count (:lines seg)) " lines"))
-                      (when open? (segment-hiccup seg))])
-                   (segment-hiccup seg)))
-               segs))))
+              (assistant-segs-hiccup expanded last-assistant? i segs))))
 
     :user
     [:box {:bg (themes/color :user-block) :hexpand true}
      (into [:vbox {:spacing 0 :padding [0 1 0 1]}]
-           (map segment-hiccup (entry-segments e wrap)))]
+           (line-segs-hiccup (entry-segments e wrap)))]
 
     (into [:vbox {:spacing 0}]
-          (map segment-hiccup (entry-segments e wrap)))))
+          (line-segs-hiccup (entry-segments e wrap)))))
 
 ;; -- clipboard (OSC 52) ------------------------------------------------------
 ;; Native terminal copy (drag-select / Ctrl+Shift+C) works again because faraday

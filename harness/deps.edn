@@ -19,7 +19,7 @@
 
         racklr-dev/glimmer-tui
         {:git/url "https://github.com/racklr-dev/glimmer-tui"
-         :git/sha "b31d9793c4bb0c181b21e2d08cea5b3080d8450d"}
+         :git/sha "bad52250f8f50957af38fd8afda53417436385b5"}
 
         racklr-dev/faraday-agent
         {:local/root "../agent"}
