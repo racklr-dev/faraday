@@ -100,4 +100,28 @@
             :history (long (Math/round (* 1.3 (ctx/estimate-json-tokens [{:role "user" :content "hi"}]))))}
            (:parts r))))
 
+;; -- keyword providers normalize to the same key as strings -------------------
+(let [cal (atom {}) win (atom {})]
+  (ctx/observe-context-estimate! cal :deepseek "m" 1000 1300)
+  (check "a keyword provider keys like its string"
+         1.3
+         (ctx/context-estimate-ratio cal "deepseek" "m"))
+  (ctx/observe-context-floor! win "deepseek" :m 5000)
+  (check "floor is read across the same key"
+         5000
+         (ctx/context-window-floor win :deepseek "m")))
+
+(check "context-window-floor is nil until observed"
+       nil
+       (ctx/context-window-floor (atom {}) "deepseek" "m"))
+
+(let [cal (atom {}) win (atom {})]
+  (ctx/observe-context-floor! win :deepseek :m 9000)
+  (let [r (ctx/context-estimate cal win
+                                {:provider :deepseek :model "m"}
+                                [{:role "system" :content "s"}])]
+    (check "context-estimate carries the proven floor"
+           9000
+           (:floor r))))
+
 (println "ALL CONTEXT TESTS PASSED")

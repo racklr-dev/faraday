@@ -51,13 +51,15 @@
   :cache-write-tokens (cache creation input), :cache-write-5m-tokens,
   :cache-write-1h-tokens, :reasoning-tokens. Absent fields are omitted, so a
   provider that never reports cache yields {}. Reads both dialect spellings:
-  cache_read_tokens and prompt_tokens_details.cached_tokens (OpenAI chat), and
-  the cache_creation_input_tokens / cache_write_tokens pair."
+  cache_read_tokens, prompt_tokens_details.cached_tokens (OpenAI chat), and
+  DeepSeek's prompt_cache_hit_tokens, and the cache_creation_input_tokens /
+  cache_write_tokens pair."
   [u]
   (when (map? u)
     (let [details (or (:prompt_tokens_details u) (:input_tokens_details u))
           creation (:cache_creation u)
           cached (reported-count (:cache_read_tokens u)
+                                 (:prompt_cache_hit_tokens u)
                                  (get details :cached_tokens))
           write (reported-count (:cache_creation_input_tokens u)
                                 (:cache_write_tokens u)
@@ -132,7 +134,8 @@
       (when-let [measured (:prompt_tokens usage)]
         (ctx/observe-context-estimate!
          (:provider cfg) (:model cfg)
-         (ctx/estimate-messages-tokens messages) measured))
+         (ctx/estimate-messages-tokens messages) measured)
+        (ctx/observe-context-floor! (:provider cfg) (:model cfg) measured))
       {:action action :usage usage})))
 
 (defn completion->action

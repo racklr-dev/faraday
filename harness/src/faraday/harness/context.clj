@@ -27,6 +27,12 @@
   actually processed. Ceiling: the estimate-grade of a refused request."
   (atom {}))
 
+(defn- norm
+  "Provider/model ids to a stable string key: keywords drop their colon, strings
+  pass through, anything else is nil — one predicate for every read/write site."
+  [x]
+  (cond (keyword? x) (name x) (string? x) x :else nil))
+
 (defn estimate-json-tokens
   "nodecode ESTIMATE-JSON-TOKENS: chars/4 of JSON text, the cheap estimate the
   calibration ratio corrects."
@@ -45,7 +51,8 @@
   "The measured/estimated ratio for (PROVIDER, MODEL), 1.0 until observed."
   ([provider model] (context-estimate-ratio calibration provider model))
   ([state provider model]
-   (or (get @state (str provider "/" model)) 1.0)))
+   (let [p (norm provider) m (norm model)]
+     (if (and p m) (or (get @state (str p "/" m)) 1.0) 1.0))))
 
 (defn observe-context-estimate!
   "Take one round's MEASURED prompt tokens over its ESTIMATED count as the
@@ -54,10 +61,10 @@
   ([provider model estimated measured]
    (observe-context-estimate! calibration provider model estimated measured))
   ([state provider model estimated measured]
-   (when (and (string? provider) (string? model)
-              (integer? estimated) (pos? estimated)
-              (integer? measured) (pos? measured))
-     (swap! state assoc (str provider "/" model) (/ (double measured) estimated)))
+   (let [p (norm provider) m (norm model)]
+     (when (and p m (integer? estimated) (pos? estimated)
+                (integer? measured) (pos? measured))
+       (swap! state assoc (str p "/" m) (/ (double measured) estimated))))
    nil))
 
 ;; -- learned budget ----------------------------------------------------------
@@ -71,13 +78,14 @@
   ([provider model prior operator-p]
    (context-window-belief windows provider model prior operator-p))
   ([state provider model prior operator-p]
-   (if (or operator-p (not (string? provider)) (not (string? model)))
-     prior
-     (let [{:keys [floor ceiling]} (get @state (str provider "/" model))]
-       (cond
-         (nil? prior) (when ceiling (max (or floor 0) ceiling))
-         ceiling (max (or floor 0) (min (max prior (or floor 0)) ceiling))
-         :else (max prior (or floor 0)))))))
+   (let [p (norm provider) m (norm model)]
+     (if (or operator-p (not p) (not m))
+       prior
+       (let [{:keys [floor ceiling]} (get @state (str p "/" m))]
+         (cond
+           (nil? prior) (when ceiling (max (or floor 0) ceiling))
+           ceiling (max (or floor 0) (min (max prior (or floor 0)) ceiling))
+           :else (max prior (or floor 0))))))))
 
 (defn observe-context-floor!
   "Record a proven floor: the server actually processed PROMPT-TOKENS, so the
@@ -85,10 +93,10 @@
   ([provider model prompt-tokens]
    (observe-context-floor! windows provider model prompt-tokens))
   ([state provider model prompt-tokens]
-   (when (and (string? provider) (string? model)
-              (integer? prompt-tokens) (pos? prompt-tokens))
-     (swap! state update (str provider "/" model)
-            (fn [obs] (assoc obs :floor (max (:floor obs 0) prompt-tokens)))))
+   (let [p (norm provider) m (norm model)]
+     (when (and p m (integer? prompt-tokens) (pos? prompt-tokens))
+       (swap! state update (str p "/" m)
+              (fn [obs] (assoc obs :floor (max (:floor obs 0) prompt-tokens))))))
    nil))
 
 (defn observe-context-ceiling!
@@ -97,10 +105,10 @@
   ([provider model estimated]
    (observe-context-ceiling! windows provider model estimated))
   ([state provider model estimated]
-   (when (and (string? provider) (string? model)
-              (integer? estimated) (pos? estimated))
-     (swap! state update (str provider "/" model)
-            (fn [obs] (assoc obs :ceiling (min (:ceiling obs estimated) estimated)))))
+   (let [p (norm provider) m (norm model)]
+     (when (and p m (integer? estimated) (pos? estimated))
+       (swap! state update (str p "/" m)
+              (fn [obs] (assoc obs :ceiling (min (:ceiling obs estimated) estimated))))))
    nil))
 
 (defn effective-context-budget
@@ -112,6 +120,15 @@
    (context-window-belief state (:provider cfg) (:model cfg)
                           (:context-tokens cfg)
                           (:context-tokens-operator-p cfg))))
+
+(defn context-window-floor
+  "The largest prompt the server has processed for (PROVIDER, MODEL): the
+  proven lower bound on the window, nil until observed. Distinct from
+  context-window-belief, which stays nil until a prior or ceiling exists."
+  ([provider model] (context-window-floor windows provider model))
+  ([state provider model]
+   (let [p (norm provider) m (norm model)]
+     (when (and p m) (:floor (get @state (str p "/" m)))))))
 
 ;; -- pressure ----------------------------------------------------------------
 
@@ -151,6 +168,7 @@
      (assoc pressure
             :ratio ratio
             :raw raw
+            :floor (context-window-floor win-state (:provider cfg) (:model cfg))
             :parts {:messages raw
                     :standing (scaled standing)
                     :history (scaled history)}))))

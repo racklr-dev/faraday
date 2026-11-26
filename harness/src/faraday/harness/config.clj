@@ -353,7 +353,8 @@
         entry (or (:chat config) {})
         alias (or (:provider entry) :deepseek)
         p (resolve-provider config alias opts)]
-    {:base-url (or (:base-url opts)
+    {:provider alias
+     :base-url (or (:base-url opts)
                    (env "FARADAY_LLM_BASE_URL")
                    (:base-url entry) (:base_url entry)
                    (:base_url llm) (:base-url llm)

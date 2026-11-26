@@ -104,4 +104,8 @@
            (llm/add-usage {:prompt_tokens 20 :completion_tokens 10 :total_tokens 30
                            :cached-input-tokens 25})))
 
+(check "cache-usage reads DeepSeek's prompt_cache_hit_tokens"
+       {:cached-input-tokens 40}
+       (llm/cache-usage {:prompt_cache_hit_tokens 40 :prompt_cache_miss_tokens 80}))
+
 (println "ALL LLM TESTS PASSED")

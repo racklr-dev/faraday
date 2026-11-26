@@ -18,6 +18,7 @@
             [faraday.harness.run :as run]
             [faraday.harness.commands :as cmd]
             [faraday.harness.config :as config]
+            [faraday.harness.context :as ctx]
             [faraday.harness.dialog :as dialog]
             [faraday.harness.guard :as guard]
             [faraday.harness.llm :as llm]
@@ -1557,6 +1558,69 @@
       (swap! usage llm/add-usage (llm/response-usage resp)))
     (str/trim (str (get-in resp [:choices 0 :message :content])))))
 
+;; -- footer -------------------------------------------------------------------
+
+(defn human-tokens
+  "1234 -> \"1.2k\"; under 1000 stays as-is, and a trailing .0 is stripped."
+  [n]
+  (let [n (long (or n 0))]
+    (if (>= n 1000)
+      (let [s (format "%.1f" (/ n 1000.0))]
+        (str (if (str/ends-with? s ".0") (subs s 0 (- (count s) 2)) s) "k"))
+      (str n))))
+
+(defn shorten-home
+  "~/.x for paths under the user's home; any other path unchanged."
+  [p]
+  (let [p (str (or p ""))
+        home (System/getProperty "user.home")]
+    (if (and (seq home) (str/starts-with? p home))
+      (str "~" (subs p (count home)))
+      p)))
+
+(defn usage-readout
+  "One-line token usage with the cache share: \"↑1.2k(310c) ↓480\". The (cached)
+  part appears only when the provider reported a cache read."
+  [usage]
+  (let [u (or usage {})
+        p (long (or (:prompt_tokens u) 0))
+        c (long (or (:completion_tokens u) 0))
+        cached (long (or (:cached-input-tokens u) 0))]
+    (str "↑" (human-tokens p)
+         (when (pos? cached) (str "(" (human-tokens cached) "c)"))
+         " ↓" (human-tokens c))))
+
+(defn ctx-readout
+  "The context estimate against its window: \"ctx 24k/64k 37%\", \"ctx 24k/?\"
+  when the window is unproven, \"ctx 24k/≥12k\" when only a floor is known."
+  [est]
+  (let [e (or est {})
+        est-tokens (human-tokens (:estimated e))
+        budget (:budget e)
+        floor (:floor e)]
+    (cond
+      (and (number? budget) (pos? budget))
+      (str "ctx " est-tokens "/" (human-tokens budget) " "
+           (long (Math/round (* 100 (/ (double (or (:estimated e) 0)) (double budget))))) "%")
+      (and (number? floor) (pos? floor))
+      (str "ctx " est-tokens "/≥" (human-tokens floor))
+      :else
+      (str "ctx " est-tokens "/?"))))
+
+(defn footer-readout
+  "One bottom status line: git branch · thread · cwd · usage · context · model.
+  Pure over already-resolved fields; nil branch/thread/cwd drop out."
+  [{:keys [branch thread-id cwd usage ctx model]}]
+  (str/join "  "
+            (filter seq
+                    [(when branch (str branch))
+                     (when thread-id
+                       (str "#" (subs (str thread-id) 0 (min 8 (count (str thread-id))))))
+                     (when cwd (shorten-home cwd))
+                     (usage-readout usage)
+                     (ctx-readout ctx)
+                     (when model (str model))])))
+
 (defn chat-app
   "The agentic chat component. `opts` accepts :system, :wrap, :model, :base-url,
   :api-key (the latter three override config/resolve-chat), :max-turns, and the
@@ -1570,6 +1634,7 @@
         cols (r/atom nil)
         breaker (atom {:failures 0 :open? false})
         usage (r/atom {:prompt_tokens 0 :completion_tokens 0 :total_tokens 0 :requests 0})
+        ctx-cache (atom nil)
         call (or (:call opts)
                  (with-circuit-breaker breaker #(model-step @cfg strong % usage)))
         exec (or (:exec opts) host-exec)
@@ -1578,6 +1643,7 @@
         thread-id (:thread-id opts)
         thread-ref (atom thread-id)
         cwd (or (:cwd opts) (System/getProperty "user.dir"))
+        branch (git-branch cwd)
         proj-root (:proj-root opts)
         harness (:harness opts)
         board (:board opts)
@@ -2179,7 +2245,13 @@
                   ((:send! sess) text)))))]
     (fn []
       (let [{:keys [messages busy? error]} @state
-            wrap (wrap-width opts (or @cols (live-cols) 92))]
+            wrap (wrap-width opts (or @cols (live-cols) 92))
+            ccfg @cfg
+            _ (when-not (and (identical? messages (:msgs @ctx-cache))
+                             (identical? ccfg (:cfg @ctx-cache)))
+                (reset! ctx-cache {:msgs messages :cfg ccfg
+                                   :readout (ctx/context-estimate ccfg (build-messages system messages))}))
+            ctx-est (:readout @ctx-cache)]
         [:vbox {:spacing 0 :padding [0 1 0 1]
                 :bg (themes/color :canvas)
                 :on-key (fn [ev]
@@ -2282,7 +2354,15 @@
                    :on-activate send!}]
           [:label {:label (if busy? "●" "○")
                    :color (if busy? (themes/color :tool) (themes/color :muted))
-                   :bold true}]]]))))
+                   :bold true}]]
+         [:hbox {:bg (themes/color :chrome-bar) :hexpand true :spacing 2 :padding [0 1]}
+          [:label {:label (footer-readout {:branch branch
+                                           :thread-id @thread-ref
+                                           :cwd cwd
+                                           :usage @usage
+                                           :ctx ctx-est
+                                           :model (:model ccfg)})
+                   :color (themes/color :chrome) :hexpand true}]]]))))
 
 (defn- chat-flags
   "--key v | --key=v -> {key v} for chat's small flag set."
