@@ -7,7 +7,8 @@
 ;;   cd jolt-rap && sudo -u jm --preserve-env env JOLT_BIN=... MP_N=2000 MP_K=10 MP_CONCS=16,64,128,256 PATH=...:$PATH .../jolt run test/jolt/daemon_probe.clj
 (ns jolt.daemon-probe
   (:require [jolt.microvm :as microvm]
-            [jolt.exec.client :as exec-client])
+            [jolt.exec.client :as exec-client]
+            [clojure.string :as str])
   (:import [java.util.concurrent Executors TimeUnit Callable]))
 
 (def N (if-let [v (System/getenv "MP_N")] (Long/parseLong v) 2000))

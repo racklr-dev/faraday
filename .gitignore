@@ -12,3 +12,6 @@ target/
 # nix build symlink
 result
 result-*
+
+# clj-kondo lint cache
+.clj-kondo/.cache/

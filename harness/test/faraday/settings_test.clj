@@ -3,6 +3,7 @@
 ;; back to the user settings file. Run: cd harness && jolt run test/faraday/settings_test.clj
 (ns jolt.test.settings
   (:require [faraday.harness.settings :as s]
+            [faraday.harness.config :as config]
             [clojure.data.json :as json]
             [clojure.string :as str]))
 

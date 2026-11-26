@@ -13,7 +13,8 @@
             [faraday.pool :as pool]
             [faraday.memo :as memo]
             [faraday.memory :as memory]
-            [jolt.microvm :as microvm]))
+            [jolt.microvm :as microvm]
+            [clojure.string :as str]))
 
 (defn check [label expected got]
   (if (= expected got)

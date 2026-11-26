@@ -1,0 +1,8 @@
+{:lint-as {jolt.ffi/defcfn clojure.core/def
+           jolt.scheme/defsfn clojure.core/def
+           faraday.contracts/define-contract clojure.core/def}
+ :linters {:unresolved-namespace
+           {:exclude [jolt.host jolt.ffi jolt.fibers jolt.scheme jolt.fs
+                      jolt.image jolt.infix jolt.io-poller jolt.nrepl
+                      jolt.parser jolt.process jolt.socket jolt.time
+                      jolt.util]}}}
