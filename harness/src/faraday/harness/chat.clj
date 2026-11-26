@@ -34,6 +34,7 @@
             [glimmer-tui.keys :as k]
             [glimmer-tui.widget :as w]
             [glimmer-tui.widgets.scroll :as scroll]
+            [glimmer-tui.terminal :as term]
             [jolt.host]
             [jolt.markdown.core :as md]))
 
@@ -1539,48 +1540,10 @@
 
 ;; -- clipboard (OSC 52) ------------------------------------------------------
 ;; Native terminal copy (drag-select / Ctrl+Shift+C) works again because faraday
-;; runs glimmer-tui with :mouse? false. This is the explicit copy: Ctrl+Y yanks
-;; the last answer onto the terminal clipboard through OSC 52, which most
-;; terminals honour and the rest ignore silently.
-
-(def ^:private b64-scheme
-  "(define (faraday-b64 s)
-  (let* ((bv (string->utf8 s))
-         (n (bytevector-length bv))
-         (tbl (list->string (map integer->char
-                                  (append (map (lambda (x) (+ 65 x)) (iota 26))
-                                          (map (lambda (x) (+ 97 x)) (iota 26))
-                                          (map (lambda (x) (+ 48 x)) (iota 10))
-                                          (list 43 47)))))
-         (out (open-output-string)))
-    (let loop ((i 0))
-      (if (>= i n)
-          (get-output-string out)
-          (let* ((a (bytevector-u8-ref bv i))
-                 (b (if (< (+ i 1) n) (bytevector-u8-ref bv (+ i 1)) 0))
-                 (c (if (< (+ i 2) n) (bytevector-u8-ref bv (+ i 2)) 0))
-                 (x (+ (ash a 16) (ash b 8) c)))
-            (write-char (string-ref tbl (bitwise-and (ash x -18) 63)) out)
-            (write-char (string-ref tbl (bitwise-and (ash x -12) 63)) out)
-            (write-char (if (< (+ i 1) n) (string-ref tbl (bitwise-and (ash x -6) 63)) (integer->char 61)) out)
-            (write-char (if (< (+ i 2) n) (string-ref tbl (bitwise-and x 63)) (integer->char 61)) out)
-            (loop (+ i 3)))))))")
-
-(def ^:private faraday-b64
-  (do (jolt.host/scheme-eval-string b64-scheme)
-      (jolt.host/scheme-proc "faraday-b64")))
-
-(defn- copy-sequence
-  "The OSC 52 sequence that puts `text` on the terminal clipboard."
-  [text]
-  (str "\u001b]52;c;" (faraday-b64 (str text)) "\u0007"))
-
-(defn- emit-clipboard!
-  "Write `text` to the terminal clipboard; a terminal that does not speak OSC 52
-  ignores the sequence."
-  [text]
-  (print (copy-sequence text))
-  (flush))
+;; runs glimmer-tui with :mouse? false. This is the explicit copy: Ctrl+X yanks
+;; the last answer onto the terminal clipboard through glimmer-tui.terminal's
+;; OSC 52 writer, which most terminals honour and the rest ignore silently.
+(defn- emit-clipboard! [text] (term/copy! text))
 
 (defn system-with-context
   "The chat system prompt: `base` (the tool contract) plus the operator's

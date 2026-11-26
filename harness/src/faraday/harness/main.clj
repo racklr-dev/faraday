@@ -19,7 +19,8 @@
             [faraday.harness.llm :as llm]
             [clojure.edn :as edn]
             [clojure.string :as str]
-            [clojure.java.io :as io]))
+            [clojure.java.io :as io]
+            [glimmer-tui.terminal :as term]))
 
 ;; -- argv --------------------------------------------------------------------
 
@@ -243,7 +244,12 @@
         manifest (when-let [f (flag flags :manifest)] (edn/read-string (slurp f)))]
     (if-not task-id
       (usage)
-      (prn (run-task! root task-id :manifest manifest :exec (flag flags :exec))))))
+      (let [summary (run-task! root task-id :manifest manifest :exec (flag flags :exec))]
+        (prn summary)
+        (term/notify! (str "faraday run " task-id (if (:green? summary) " passed" " FAILED"))
+                      (str "agent " (name (or (:agent-status summary) :unknown))
+                           " · " (:hook-runs summary) " hook runs"))
+        summary))))
 
 ;; -- improve: the self-improvement gate --------------------------------------
 
@@ -260,10 +266,13 @@
                                                        :base-url (flag flags :base-url)})
                        (throw (ex-info "unknown proposer (want budget|model)"
                                        {:proposer proposer-kind})))]
-        (prn (sup/improve! {:root root
-                            :task-id task-id
-                            :n (parse-long* (flag flags :n))
-                            :proposer proposer}))))))
+        (let [summary (sup/improve! {:root root
+                                     :task-id task-id
+                                     :n (parse-long* (flag flags :n))
+                                     :proposer proposer})]
+          (prn summary)
+          (term/notify! (str "faraday improve " task-id " complete"))
+          summary)))))
 
 ;; -- config: the resolved settings.json surface ---------------------------------
 

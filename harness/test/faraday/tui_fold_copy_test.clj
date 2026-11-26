@@ -7,6 +7,7 @@
             [glimmer.core :as ui]
             [glimmer-tui.core :as tui]
             [glimmer-tui.screen :as scr]
+            [glimmer-tui.terminal :as term]
             [glimmer-tui.widget :as w]
             [clojure.string :as str]))
 
@@ -26,17 +27,17 @@
       (some #(find-button pred %) (:children @w)))))
 
 ;; -- clipboard, pure -----------------------------------------------------------
-;; (hi) base64 is aGk= ; the OSC 52 copy sequence is ESC ] 52 ; c ; <b64> BEL.
-(let [s (#'chat/copy-sequence "hi")]
+;; (hi) base64 is aGk= ; the OSC 52 copy sequence is ESC ] 52 ; c ; <b64> ST.
+(let [s (term/copy-sequence "hi")]
   (check "copy-sequence carries the OSC 52 header"
          true (str/starts-with? s "\u001b]52;c;"))
   (check "copy-sequence base64-encodes utf-8"
-         "aGk=" (subs s (count "\u001b]52;c;") (- (count s) 1)))
-  (check "copy-sequence ends with BEL"
-         "\u0007" (subs s (dec (count s)))))
+         "aGk=" (subs s (count "\u001b]52;c;") (- (count s) 2)))
+  (check "copy-sequence ends with ST (ESC + backslash)"
+         "\u001b\\" (subs s (- (count s) 2))))
 
-(let [s (#'chat/copy-sequence "hé")]
-  (check "copy-sequence handles non-ascii" "aMOp" (subs s (count "\u001b]52;c;") (- (count s) 1))))
+(let [s (term/copy-sequence "hé")]
+  (check "copy-sequence handles non-ascii" "aMOp" (subs s (count "\u001b]52;c;") (- (count s) 2))))
 
 ;; -- tool results fold ---------------------------------------------------------
 (let [calls (atom [])
